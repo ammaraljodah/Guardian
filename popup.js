@@ -5,6 +5,7 @@ import {
   domainMatches,
   isTempAllowed
 } from "./store.js";
+import { aggregate, formatDuration } from "./stats.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -35,6 +36,10 @@ async function render() {
     .length;
   $("catCount").textContent = enabledCats;
   $("customCount").textContent = (settings.customBlocked || []).length;
+
+  const today = await aggregate(1);
+  $("todayTime").textContent = formatDuration(today.totalSeconds);
+  $("todayVisits").textContent = today.totalVisits;
 
   // Status of the current tab.
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });

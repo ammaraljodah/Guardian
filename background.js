@@ -5,6 +5,13 @@ import {
   domainMatches,
   isTempAllowed
 } from "./store.js";
+import {
+  recordVisit,
+  addTime,
+  recordBlocked,
+  recordSearch,
+  extractSearch
+} from "./stats.js";
 
 /** Build the effective set of blocked base-domains from settings. */
 function buildBlocklist(settings) {
@@ -48,6 +55,7 @@ async function enforce(tabId, url) {
   if (isOwnPage(url)) return; // never re-block our own blocked page
   const blockedDomain = await shouldBlock(url);
   if (blockedDomain) {
+    recordBlocked(blockedDomain, "blocked");
     const target = chrome.runtime.getURL(
       `blocked.html?site=${encodeURIComponent(blockedDomain)}`
     );
@@ -67,6 +75,75 @@ chrome.webNavigation.onHistoryStateUpdated.addListener((d) => {
   enforce(d.tabId, d.url);
 });
 
+// Count a "visit" whenever a real http/https page commits in the top frame.
+chrome.webNavigation.onCommitted.addListener((d) => {
+  if (d.frameId !== 0) return;
+  if (isOwnPage(d.url)) return;
+  const domain = toDomain(d.url);
+  if (domain) recordVisit(domain);
+  const search = extractSearch(d.url);
+  if (search) recordSearch(search.engine, search.query);
+});
+
+/* ------------------------- Time-on-site tracking ------------------------ */
+// We track how long the currently focused tab's domain stays active, pausing
+// on idle / lost focus. The active session lives in chrome.storage.session so
+// it survives service-worker suspension.
+const SESSION_KEY = "guardianActiveSession";
+const MAX_SESSION_SECONDS = 3600; // ignore absurd deltas (sleep, etc.)
+
+async function getActiveDomain() {
+  try {
+    const [tab] = await chrome.tabs.query({
+      active: true,
+      lastFocusedWindow: true
+    });
+    if (!tab || !tab.url || isOwnPage(tab.url)) return null;
+    return toDomain(tab.url);
+  } catch (e) {
+    return null;
+  }
+}
+
+async function flushSession() {
+  const o = await chrome.storage.session.get(SESSION_KEY);
+  const s = o[SESSION_KEY];
+  if (!s) return;
+  const secs = Math.round((Date.now() - s.start) / 1000);
+  if (secs > 0 && secs < MAX_SESSION_SECONDS) await addTime(s.domain, secs);
+  await chrome.storage.session.remove(SESSION_KEY);
+}
+
+async function refreshSession() {
+  await flushSession();
+  const domain = await getActiveDomain();
+  if (domain) {
+    await chrome.storage.session.set({
+      [SESSION_KEY]: { domain, start: Date.now() }
+    });
+  }
+}
+
+chrome.tabs.onActivated.addListener(() => refreshSession());
+chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
+  if (tab.active && (info.url || info.status === "complete")) refreshSession();
+});
+chrome.windows.onFocusChanged.addListener((windowId) => {
+  if (windowId === chrome.windows.WINDOW_ID_NONE) flushSession();
+  else refreshSession();
+});
+chrome.idle.setDetectionInterval(60);
+chrome.idle.onStateChanged.addListener((state) => {
+  if (state === "active") refreshSession();
+  else flushSession();
+});
+
+// Periodic flush so ongoing time is persisted even without navigation events.
+chrome.alarms.create("flushTick", { periodInMinutes: 1 });
+chrome.alarms.onAlarm.addListener((a) => {
+  if (a.name === "flushTick") refreshSession();
+});
+
 // Messages from the content script (proxy-page heuristics) and pages.
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type === "PROXY_DETECTED" && sender.tab?.id != null) {
@@ -77,6 +154,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const domain = toDomain(sender.tab.url);
       if (domain && domainMatches(domain, settings.allowlist || [])) return;
       if (domain && isTempAllowed(settings, domain)) return;
+      recordBlocked(domain || "proxy", "proxy");
       const target = chrome.runtime.getURL(
         `blocked.html?site=${encodeURIComponent(domain || "proxy")}&reason=proxy`
       );
