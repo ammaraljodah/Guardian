@@ -7,6 +7,7 @@ import {
 } from "./store.js";
 import {
   recordVisit,
+  recordVisitLog,
   addTime,
   recordBlocked,
   recordSearch,
@@ -80,7 +81,10 @@ chrome.webNavigation.onCommitted.addListener((d) => {
   if (d.frameId !== 0) return;
   if (isOwnPage(d.url)) return;
   const domain = toDomain(d.url);
-  if (domain) recordVisit(domain);
+  if (domain) {
+    recordVisit(domain);
+    recordVisitLog(domain, d.url);
+  }
   const search = extractSearch(d.url);
   if (search) recordSearch(search.engine, search.query);
 });

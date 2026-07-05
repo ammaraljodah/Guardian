@@ -125,7 +125,9 @@ export function formatDuration(seconds) {
 
 const BLOCKED_KEY = "guardianBlockedLog";
 const SEARCH_KEY = "guardianSearchLog";
+const VISIT_KEY = "guardianVisitLog";
 const LOG_CAP = 1000;
+const VISIT_CAP = 5000;
 
 // Timestamp for the start of the day `days-1` days ago (local). null = all time.
 function cutoffTs(days) {
@@ -149,6 +151,37 @@ async function readLog(key, days) {
   const log = o[key] || [];
   const cutoff = cutoffTs(days);
   return cutoff ? log.filter((e) => e.ts >= cutoff) : log;
+}
+
+// Chronological "sites visited" history. Consecutive hits on the same domain
+// are collapsed into one entry (so reloads / multi-page browsing on one site
+// don't spam the list); we bump the last entry's timestamp instead.
+export async function recordVisitLog(domain, url) {
+  if (!domain) return;
+  const o = await chrome.storage.local.get(VISIT_KEY);
+  const log = o[VISIT_KEY] || [];
+  if (log.length && log[0].domain === domain) {
+    log[0].ts = Date.now();
+    log[0].count = (log[0].count || 1) + 1;
+  } else {
+    log.unshift({
+      ts: Date.now(),
+      domain,
+      category: categoryOf(domain),
+      url: url || "",
+      count: 1
+    });
+    if (log.length > VISIT_CAP) log.length = VISIT_CAP;
+  }
+  await chrome.storage.local.set({ [VISIT_KEY]: log });
+}
+
+export function getVisitLog(days) {
+  return readLog(VISIT_KEY, days);
+}
+
+export async function clearVisitLog() {
+  await chrome.storage.local.set({ [VISIT_KEY]: [] });
 }
 
 export async function recordBlocked(domain, reason, category) {

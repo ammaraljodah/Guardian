@@ -13,8 +13,10 @@ import {
   CATEGORY_META,
   getSearchLog,
   getBlockedLog,
+  getVisitLog,
   clearSearchLog,
-  clearBlockedLog
+  clearBlockedLog,
+  clearVisitLog
 } from "./stats.js";
 
 const $ = (id) => document.getElementById(id);
@@ -107,7 +109,12 @@ $("clearStatsBtn").addEventListener("click", async () => {
       "Clear all recorded statistics, searches and blocked attempts? This cannot be undone."
     )
   ) {
-    await Promise.all([clearStats(), clearSearchLog(), clearBlockedLog()]);
+    await Promise.all([
+      clearStats(),
+      clearSearchLog(),
+      clearBlockedLog(),
+      clearVisitLog()
+    ]);
     renderStats();
   }
 });
@@ -134,6 +141,7 @@ async function renderStats() {
     renderLegend(byCategory, totalSeconds);
     renderSites(sites);
 
+    renderHistoryLog(await getVisitLog(days));
     renderSearchLog(await getSearchLog(days));
     renderBlockedLog(await getBlockedLog(days));
   } catch (err) {
@@ -153,6 +161,22 @@ function fmtTime(ts) {
     hour: "2-digit",
     minute: "2-digit"
   });
+}
+
+function renderHistoryLog(entries) {
+  const body = $("historyBody");
+  body.innerHTML = "";
+  $("historyEmpty").style.display = entries.length ? "none" : "block";
+  for (const e of entries.slice(0, 500)) {
+    const meta = CATEGORY_META[e.category] || CATEGORY_META.other;
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td class="muted">${fmtTime(e.ts)}</td>
+      <td>${e.domain}</td>
+      <td><span class="badge" style="background:${meta.color}">${meta.label}</span></td>
+      <td class="num">${e.count || 1}</td>`;
+    body.appendChild(tr);
+  }
 }
 
 function renderSearchLog(entries) {
@@ -199,6 +223,7 @@ function csvCell(v) {
 async function exportCsv() {
   const days = currentDays();
   const { sites } = await aggregate(days);
+  const history = await getVisitLog(days);
   const searches = await getSearchLog(days);
   const blocked = await getBlockedLog(days);
 
@@ -207,6 +232,16 @@ async function exportCsv() {
   lines.push(["domain", "category", "visits", "seconds"].join(","));
   for (const s of sites) {
     lines.push([s.domain, s.category, s.visits, s.seconds].map(csvCell).join(","));
+  }
+  lines.push("");
+  lines.push("VISIT_HISTORY");
+  lines.push(["timestamp", "domain", "category", "hits", "url"].join(","));
+  for (const e of history) {
+    lines.push(
+      [new Date(e.ts).toISOString(), e.domain, e.category, e.count || 1, e.url || ""]
+        .map(csvCell)
+        .join(",")
+    );
   }
   lines.push("");
   lines.push("SEARCHES");

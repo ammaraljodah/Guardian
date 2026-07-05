@@ -195,6 +195,9 @@ Open **Parent settings** (PIN required) → **Statistics** tab:
 - **KPIs**: total time, total visits, distinct sites for the selected period.
 - **Time by category**: donut chart + legend with per-category time and share.
 - **Sites table**: every visited domain with its category, visit count and time.
+- **Visit history**: a chronological, newest-first log of every site visited
+  (timestamp, domain, category, hit count). Consecutive visits to the same
+  domain are collapsed into one entry.
 - **Search activity**: search terms captured from URLs — major engines (Google,
 Bing, DuckDuckGo, YouTube, Yahoo, Ecosia, Startpage, Baidu, Yandex, Brave,
 Qwant, Marginalia), popular sites (Wikipedia, Reddit, Amazon, eBay, Etsy,
