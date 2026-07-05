@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Guardian - Parent Settings</title>
+    <link rel="stylesheet" href="styles.css" />
+    <style>
+      .container {
+        max-width: 760px;
+        margin: 0 auto;
+        padding: 32px 20px 64px;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 24px;
+      }
+      .brand .logo {
+        font-size: 34px;
+      }
+      .brand small {
+        display: block;
+        color: var(--muted);
+        font-weight: 400;
+      }
+      section.card {
+        margin-bottom: 18px;
+      }
+      .gate {
+        max-width: 420px;
+        margin: 10vh auto 0;
+        display: grid;
+        gap: 12px;
+      }
+      .hidden {
+        display: none !important;
+      }
+      .cat {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 0;
+        border-bottom: 1px solid var(--border);
+      }
+      .cat:last-child {
+        border-bottom: none;
+      }
+      .cat .meta small {
+        color: var(--muted);
+      }
+      /* toggle */
+      .switch {
+        position: relative;
+        width: 48px;
+        height: 28px;
+        flex: none;
+      }
+      .switch input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+      }
+      .slider {
+        position: absolute;
+        inset: 0;
+        background: #33406b;
+        border-radius: 999px;
+        transition: 0.2s;
+      }
+      .slider::before {
+        content: "";
+        position: absolute;
+        height: 22px;
+        width: 22px;
+        left: 3px;
+        top: 3px;
+        background: #fff;
+        border-radius: 50%;
+        transition: 0.2s;
+      }
+      input:checked + .slider {
+        background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      }
+      input:checked + .slider::before {
+        transform: translateX(20px);
+      }
+      .list-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 8px 10px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        margin-bottom: 8px;
+      }
+      .list-item button {
+        padding: 4px 10px;
+        font-size: 13px;
+      }
+      .add-row {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+      .add-row input {
+        flex: 1;
+      }
+      .add-row button {
+        flex: none;
+      }
+      .status-banner {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      h2 .hint {
+        font-size: 13px;
+        font-weight: 400;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="brand">
+        <span class="logo">🛡️</span>
+        <div>
+          <h1 style="margin: 0">Guardian</h1>
+          <small>Parental site controls</small>
+        </div>
+      </div>
+
+      <!-- ===== Create PIN (first run) ===== -->
+      <section id="setupView" class="gate card hidden">
+        <h2>Create a parent PIN</h2>
+        <p class="muted">
+          This PIN protects all settings and unblock requests. Keep it secret.
+        </p>
+        <input type="password" id="newPin" placeholder="New PIN (min 4 digits)" inputmode="numeric" />
+        <input type="password" id="confirmPin" placeholder="Confirm PIN" inputmode="numeric" />
+        <button id="createPinBtn">Create PIN & enable protection</button>
+        <div class="error" id="setupError"></div>
+      </section>
+
+      <!-- ===== Lock screen ===== -->
+      <section id="lockView" class="gate card hidden">
+        <h2>Parent access</h2>
+        <p class="muted">Enter your PIN to manage settings.</p>
+        <input type="password" id="lockPin" placeholder="Parent PIN" inputmode="numeric" />
+        <button id="unlockBtn">Unlock</button>
+        <div class="error" id="lockError"></div>
+      </section>
+
+      <!-- ===== Dashboard ===== -->
+      <div id="dashboard" class="hidden">
+        <section class="card">
+          <div class="status-banner">
+            <div>
+              <h2 style="margin: 0">Protection status</h2>
+              <span id="statusPill" class="pill on">Active</span>
+            </div>
+            <div class="row">
+              <button id="pauseBtn" class="secondary">Pause 15 min</button>
+              <button id="resumeBtn" class="secondary hidden">Resume now</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>Blocked categories <span class="hint">toggle whole themes</span></h2>
+          <div id="categories"></div>
+        </section>
+
+        <section class="card">
+          <h2>Custom blocked sites</h2>
+          <div class="add-row">
+            <input type="text" id="blockInput" placeholder="e.g. example.com" autocomplete="off" />
+            <button id="addBlockBtn">Block</button>
+          </div>
+          <div id="blockList"></div>
+        </section>
+
+        <section class="card">
+          <h2>Always-allowed sites <span class="hint">exceptions</span></h2>
+          <div class="add-row">
+            <input type="text" id="allowInput" placeholder="e.g. wikipedia.org" autocomplete="off" />
+            <button id="addAllowBtn" class="secondary">Allow</button>
+          </div>
+          <div id="allowList"></div>
+        </section>
+
+        <section class="card">
+          <h2>Change PIN</h2>
+          <div class="add-row">
+            <input type="password" id="changePin" placeholder="New PIN" inputmode="numeric" />
+            <button id="changePinBtn" class="secondary">Update</button>
+          </div>
+          <div class="error" id="changeMsg"></div>
+        </section>
+      </div>
+    </div>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

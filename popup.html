@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Guardian</title>
+    <link rel="stylesheet" href="styles.css" />
+    <style>
+      body {
+        width: 300px;
+      }
+      .pop {
+        padding: 16px;
+      }
+      .head {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 14px;
+      }
+      .head .logo {
+        font-size: 26px;
+      }
+      .stat {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 0;
+      }
+      .big {
+        font-size: 22px;
+        font-weight: 700;
+      }
+      .full {
+        width: 100%;
+        margin-top: 6px;
+      }
+      hr {
+        border: none;
+        border-top: 1px solid var(--border);
+        margin: 12px 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="pop">
+      <div class="head">
+        <span class="logo">🛡️</span>
+        <div>
+          <div style="font-weight: 700">Guardian</div>
+          <small class="muted">Parental controls</small>
+        </div>
+      </div>
+
+      <div class="stat">
+        <span>Protection</span>
+        <span id="statusPill" class="pill on">Active</span>
+      </div>
+      <div class="stat">
+        <span class="muted">Categories blocked</span>
+        <span class="big" id="catCount">0</span>
+      </div>
+      <div class="stat">
+        <span class="muted">Custom blocks</span>
+        <span class="big" id="customCount">0</span>
+      </div>
+
+      <hr />
+      <div id="currentWrap" class="muted" style="font-size: 13px"></div>
+
+      <button class="full" id="manageBtn">Parent settings</button>
+    </div>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
