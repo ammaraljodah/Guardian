@@ -20,7 +20,10 @@ export const CATEGORIES = {
       "weibo.com",
       "threads.net",
       "mastodon.social",
-      "bereal.com"
+      "bereal.com",
+      "discord.com",
+      "discord.gg",
+      "discordapp.com"
     ]
   },
   games: {

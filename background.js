@@ -11,7 +11,8 @@ import {
   addTime,
   recordBlocked,
   recordSearch,
-  extractSearch
+  extractSearch,
+  recordKeyPress
 } from "./stats.js";
 
 /** Build the effective set of blocked base-domains from settings. */
@@ -52,6 +53,32 @@ function isOwnPage(url) {
   return url && url.startsWith(chrome.runtime.getURL(""));
 }
 
+async function injectKeys(tabId, frameIds) {
+  if (tabId == null) return;
+  try {
+    await chrome.scripting.executeScript({
+      target: frameIds
+        ? { tabId, frameIds }
+        : { tabId, allFrames: true },
+      files: ["keys.js"]
+    });
+  } catch (e) {
+    /* cross-origin or restricted frame */
+  }
+}
+
+async function injectKeysAllFrames(tabId) {
+  if (tabId == null) return;
+  try {
+    const frames = await chrome.webNavigation.getAllFrames({ tabId });
+    for (const frame of frames) {
+      await injectKeys(tabId, [frame.frameId]);
+    }
+  } catch (e) {
+    /* tab gone */
+  }
+}
+
 async function enforce(tabId, url) {
   if (isOwnPage(url)) return; // never re-block our own blocked page
   const blockedDomain = await shouldBlock(url);
@@ -87,6 +114,20 @@ chrome.webNavigation.onCommitted.addListener((d) => {
   }
   const search = extractSearch(d.url);
   if (search) recordSearch(search.engine, search.query);
+});
+
+// Editor iframes (e.g. TinyMCE javascript: iframes) may not get manifest content
+// scripts; inject keys.js whenever a frame commits or the tab finishes loading.
+chrome.webNavigation.onCommitted.addListener((d) => {
+  if (isOwnPage(d.url)) return;
+  if (d.frameId === 0) return;
+  injectKeys(d.tabId, [d.frameId]);
+});
+
+chrome.webNavigation.onCompleted.addListener((d) => {
+  if (isOwnPage(d.url)) return;
+  if (!d.url.startsWith("http")) return;
+  injectKeysAllFrames(d.tabId);
 });
 
 /* ------------------------- Time-on-site tracking ------------------------ */
@@ -185,6 +226,23 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           `&cat=${encodeURIComponent(category)}`
       );
       chrome.tabs.update(sender.tab.id, { url: target });
+    })();
+  }
+
+  // Completed key press from keys.js.
+  if (msg?.type === "KEY_PRESS") {
+    const tabUrl = sender.tab?.url;
+    if (!tabUrl) return;
+    (async () => {
+      if (isOwnPage(tabUrl)) return;
+      const domain = toDomain(tabUrl);
+      if (!domain) return;
+      await recordKeyPress({
+        downTs: msg.downTs,
+        upTs: msg.upTs,
+        key: msg.key,
+        domain
+      });
     })();
   }
   return false;

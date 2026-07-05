@@ -14,9 +14,12 @@ import {
   getSearchLog,
   getBlockedLog,
   getVisitLog,
+  getKeyLog,
   clearSearchLog,
   clearBlockedLog,
-  clearVisitLog
+  clearVisitLog,
+  clearKeyLog,
+  KEY_BUCKET_MS
 } from "./stats.js";
 
 const $ = (id) => document.getElementById(id);
@@ -106,14 +109,15 @@ $("rangeSelect").addEventListener("change", renderStats);
 $("clearStatsBtn").addEventListener("click", async () => {
   if (
     confirm(
-      "Clear all recorded statistics, searches and blocked attempts? This cannot be undone."
+      "Clear all recorded statistics, searches, keyboard activity and blocked attempts? This cannot be undone."
     )
   ) {
     await Promise.all([
       clearStats(),
       clearSearchLog(),
       clearBlockedLog(),
-      clearVisitLog()
+      clearVisitLog(),
+      clearKeyLog()
     ]);
     renderStats();
   }
@@ -143,6 +147,7 @@ async function renderStats() {
 
     renderHistoryLog(await getVisitLog(days));
     renderSearchLog(await getSearchLog(days));
+    renderKeyLog(await getKeyLog(days));
     renderBlockedLog(await getBlockedLog(days));
   } catch (err) {
     console.error("[Guardian] renderStats failed:", err);
@@ -161,6 +166,28 @@ function fmtTime(ts) {
     hour: "2-digit",
     minute: "2-digit"
   });
+}
+
+function fmtTimeSec(ts) {
+  return new Date(ts).toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  });
+}
+
+function fmtKeyBucket(entry) {
+  const start = entry.bucket ?? entry.downTs;
+  const end = start + KEY_BUCKET_MS;
+  return `${fmtTimeSec(start)} – ${fmtTimeSec(end)}`;
+}
+
+function displayKeyText(entry) {
+  if (entry.text != null) return entry.text;
+  if (entry.key != null) return entry.key.length === 1 ? entry.key : `[${entry.key}]`;
+  return "";
 }
 
 function renderHistoryLog(entries) {
@@ -189,6 +216,25 @@ function renderSearchLog(entries) {
     q.textContent = e.query; // textContent avoids HTML injection
     tr.innerHTML = `<td class="muted">${fmtTime(e.ts)}</td><td>${e.engine}</td>`;
     tr.appendChild(q);
+    body.appendChild(tr);
+  }
+}
+
+function renderKeyLog(entries) {
+  const body = $("keyBody");
+  body.innerHTML = "";
+  $("keyEmpty").style.display = entries.length ? "none" : "block";
+  for (const e of entries.slice(0, 300)) {
+    const tr = document.createElement("tr");
+    const text = displayKeyText(e);
+    const textCell = document.createElement("td");
+    textCell.textContent = text;
+    textCell.title = text;
+    tr.innerHTML = `
+      <td class="muted">${fmtKeyBucket(e)}</td>
+      <td>${e.domain}</td>
+      <td class="num">${e.count || 1}</td>`;
+    tr.appendChild(textCell);
     body.appendChild(tr);
   }
 }
@@ -225,6 +271,7 @@ async function exportCsv() {
   const { sites } = await aggregate(days);
   const history = await getVisitLog(days);
   const searches = await getSearchLog(days);
+  const keys = await getKeyLog(days);
   const blocked = await getBlockedLog(days);
 
   const lines = [];
@@ -249,6 +296,24 @@ async function exportCsv() {
   for (const e of searches) {
     lines.push(
       [new Date(e.ts).toISOString(), e.engine, e.query].map(csvCell).join(",")
+    );
+  }
+  lines.push("");
+  lines.push("KEYBOARD");
+  lines.push(["period_start", "period_end", "domain", "keystrokes", "text"].join(","));
+  for (const e of keys) {
+    const start = e.bucket ?? e.downTs;
+    const end = start + KEY_BUCKET_MS;
+    lines.push(
+      [
+        new Date(start).toISOString(),
+        new Date(end).toISOString(),
+        e.domain,
+        e.count || 1,
+        displayKeyText(e)
+      ]
+        .map(csvCell)
+        .join(",")
     );
   }
   lines.push("");

@@ -6,8 +6,12 @@ const KEY = "guardianSettings";
 function defaultSettings() {
   const categories = {};
   for (const id of Object.keys(CATEGORIES)) {
-    // Sensible defaults: adult, gambling and proxies blocked out of the box.
-    categories[id] = id === "adult" || id === "gambling" || id === "proxies";
+    // Sensible defaults: adult, gambling, proxies, and social blocked out of the box.
+    categories[id] =
+      id === "adult" ||
+      id === "gambling" ||
+      id === "proxies" ||
+      id === "social";
   }
   return {
     setup: false,

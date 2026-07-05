@@ -126,6 +126,8 @@ export function formatDuration(seconds) {
 const BLOCKED_KEY = "guardianBlockedLog";
 const SEARCH_KEY = "guardianSearchLog";
 const VISIT_KEY = "guardianVisitLog";
+const KEY_LOG_KEY = "guardianKeyLog";
+export const KEY_BUCKET_MS = 3 * 60 * 1000;
 const LOG_CAP = 1000;
 const VISIT_CAP = 5000;
 
@@ -301,4 +303,64 @@ export function getSearchLog(days) {
 
 export async function clearSearchLog() {
   await chrome.storage.local.set({ [SEARCH_KEY]: [] });
+}
+
+const KEY_MODIFIERS = new Set(["Shift", "Control", "Alt", "Meta", "CapsLock"]);
+
+function keyBucketStart(ts) {
+  return Math.floor(ts / KEY_BUCKET_MS) * KEY_BUCKET_MS;
+}
+
+function applyKey(text, key) {
+  if (KEY_MODIFIERS.has(key)) return text;
+  if (key === "Backspace") return text.slice(0, -1);
+  if (key === "Enter") return text + "\n";
+  if (key === "Tab") return text + "\t";
+  if (key === " ") return text + " ";
+  if (key.length === 1) return text + key;
+  return text;
+}
+
+export async function recordKeyPress({ downTs, upTs, key, domain }) {
+  if (!domain || key == null) return;
+
+  const bucket = keyBucketStart(downTs);
+  const o = await chrome.storage.local.get(KEY_LOG_KEY);
+  const log = o[KEY_LOG_KEY] || [];
+  const idx = log.findIndex((e) => e.domain === domain && e.bucket === bucket);
+
+  if (idx >= 0) {
+    const entry = log[idx];
+    const prev = entry.text || "";
+    const next = applyKey(prev, key);
+    if (next === prev) return;
+    entry.text = next;
+    entry.upTs = upTs;
+    entry.count = (entry.count || 0) + 1;
+    log.splice(idx, 1);
+    log.unshift(entry);
+  } else {
+    const text = applyKey("", key);
+    if (!text) return;
+    log.unshift({
+      ts: downTs,
+      bucket,
+      downTs,
+      upTs,
+      text,
+      count: 1,
+      domain,
+      category: categoryOf(domain)
+    });
+    if (log.length > LOG_CAP) log.length = LOG_CAP;
+  }
+  await chrome.storage.local.set({ [KEY_LOG_KEY]: log });
+}
+
+export function getKeyLog(days) {
+  return readLog(KEY_LOG_KEY, days);
+}
+
+export async function clearKeyLog() {
+  await chrome.storage.local.set({ [KEY_LOG_KEY]: [] });
 }
