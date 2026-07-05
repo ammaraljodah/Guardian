@@ -3,6 +3,8 @@ import { CATEGORIES } from "./categories.js";
 
 const KEY = "guardianSettings";
 
+const DISCORD_DOMAINS = ["discord.com", "discord.gg", "discordapp.com"];
+
 function defaultSettings() {
   const categories = {};
   for (const id of Object.keys(CATEGORIES)) {
@@ -18,7 +20,7 @@ function defaultSettings() {
     pinHash: null,
     pinSalt: null,
     categories,
-    customBlocked: [],
+    customBlocked: [...DISCORD_DOMAINS],
     allowlist: [],
     // Epoch ms until which blocking is paused by the parent (0 = never).
     pausedUntil: 0,
@@ -40,11 +42,16 @@ export async function getSettings() {
   const data = await chrome.storage.local.get(KEY);
   const stored = data[KEY] || {};
   const base = defaultSettings();
+  const customBlocked = [...(stored.customBlocked || base.customBlocked)];
+  for (const d of DISCORD_DOMAINS) {
+    if (!customBlocked.includes(d)) customBlocked.push(d);
+  }
   // Merge so newly added categories appear for existing users.
   return {
     ...base,
     ...stored,
-    categories: { ...base.categories, ...(stored.categories || {}) }
+    categories: { ...base.categories, ...(stored.categories || {}) },
+    customBlocked
   };
 }
 
