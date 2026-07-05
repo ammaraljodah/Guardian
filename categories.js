@@ -129,14 +129,104 @@ export const CATEGORIES = {
   }
 };
 
-// Keyword fragments used by the content script for heuristic detection of
-// web-based proxy / "unblocker" pages that aren't in the domain list.
-export const PROXY_KEYWORDS = [
-  "free web proxy",
-  "unblock websites",
-  "anonymous browsing",
-  "cors anywhere",
-  "web proxy server",
-  "bypass filter",
-  "hide your ip"
-];
+// Content-based detection: how to recognize a category from PAGE CONTENT
+// (title, meta tags, visible text) when the domain isn't on the fixed list.
+// `threshold` = how many distinct keyword hits are required to block, so a
+// single incidental word won't trigger a false positive.
+export const DETECTION = {
+  adult: {
+    threshold: 2,
+    keywords: [
+      "porn",
+      "xxx",
+      "nsfw",
+      "hardcore",
+      "hentai",
+      "camgirl",
+      "sex cam",
+      "adult video",
+      "explicit content",
+      "18+ only",
+      "nude",
+      "milf",
+      "escort"
+    ]
+  },
+  gambling: {
+    threshold: 2,
+    keywords: [
+      "casino",
+      "poker",
+      "roulette",
+      "blackjack",
+      "sportsbook",
+      "betting odds",
+      "place a bet",
+      "slots",
+      "jackpot",
+      "wager",
+      "free spins",
+      "bet now",
+      "live betting"
+    ]
+  },
+  games: {
+    threshold: 2,
+    keywords: [
+      "play free games",
+      "free online games",
+      "multiplayer game",
+      "play now",
+      "html5 game",
+      "gameplay",
+      "games to play",
+      "top games",
+      "game controls",
+      "unblocked games"
+    ]
+  },
+  social: {
+    threshold: 3,
+    keywords: [
+      "news feed",
+      "friend request",
+      "followers",
+      "direct message",
+      "share your story",
+      "create a post",
+      "people you may know",
+      "log in to connect",
+      "add friend",
+      "your timeline"
+    ]
+  },
+  video: {
+    threshold: 2,
+    keywords: [
+      "watch free",
+      "stream now",
+      "full episodes",
+      "watch online",
+      "episodes and clips",
+      "live stream",
+      "subscribe to watch",
+      "watch movies"
+    ]
+  },
+  proxies: {
+    threshold: 2,
+    keywords: [
+      "free web proxy",
+      "unblock websites",
+      "unblock any website",
+      "anonymous browsing",
+      "cors anywhere",
+      "web proxy server",
+      "bypass filter",
+      "bypass school",
+      "hide your ip",
+      "surf anonymously",
+      "enter url to unblock"
+    ]
+  }
+};

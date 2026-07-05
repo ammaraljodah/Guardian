@@ -7,7 +7,11 @@ settings and unblock requests are locked behind a parent PIN.
 ## Features
 
 - **Category / theme blocking** — toggle entire groups on/off (Social Media,
-Games, Video/Streaming, Adult, Gambling, Proxies/Anonymizers).
+  Games, Video/Streaming, Adult, Gambling, Proxies/Anonymizers). Blocking is
+  **not limited to a fixed list**: in addition to curated domains, each enabled
+  category is also detected from **page content** (title/meta/text keyword
+  scoring, plus the adult RTA label), so new/unknown sites in a category are
+  blocked too.
 - **Custom block list** — block any specific domain.
 - **Allow list** — carve out exceptions that are always permitted.
 - **Parent PIN** — settings, the options page, and unblocking are all gated by a
@@ -46,11 +50,20 @@ browser still knows the real hostname it is navigating to (e.g.
 - **Network VPN / system proxy → still blocked.** The hostname is unchanged.
 - **Encrypted DNS / DoH → still blocked.** We match on the URL, not DNS.
 - **Web-based proxies** (sites that load another site inside themselves, e.g.
-`croxyproxy.com`) are the real bypass. Guardian counters these two ways:
+  `croxyproxy.com`) are the real bypass. Guardian counters these two ways:
   1. A **Proxies / Anonymizers** category with many known proxy/VPN domains.
-  2. A content script that flags pages whose text/title strongly resembles a
-    web proxy ("free web proxy", "unblock websites", …) and blocks them when
-     the Proxies category is enabled.
+  2. Content detection (below) that flags pages resembling a web proxy.
+
+### Content-based category detection (beyond the fixed list)
+
+Domain lists can never cover every site. So for each **enabled** category, a
+content script also scores the page's own title, meta tags and visible text
+against a keyword set (and the adult **RTA** self-labelling tag). If a page
+crosses the category's threshold, the tab is blocked with reason "Content
+match" — even if the domain was never on any list. Detection only runs for
+categories the parent has turned on, and respects the allow list, temporary
+overrides and pause. Thresholds require multiple keyword hits to limit false
+positives; you can always add specific sites to the allow list.
 
 
 
@@ -61,6 +74,67 @@ Proxies category on and add new ones to the custom list as you find them.
 - Guardian only controls the browser it's installed in. Other browsers, apps,
 or a different user profile are not covered — for whole-device control, pair
 it with OS-level parental controls (Windows Family Safety, etc.).
+- **Incognito** disables extensions by default (see below) — a known bypass.
+
+## Closing the Incognito bypass
+
+By default Chrome does **not** run extensions in Incognito, so Guardian is
+inactive there. Two ways to fix it:
+
+**A. Allow the extension in Incognito (quick):** `chrome://extensions` →
+Guardian → **Details** → enable **Allow in Incognito**. Blocking, detection and
+stats then work in Incognito too. A user could toggle this back off unless the
+extension is force-installed and locked (below).
+
+**B. Disable Incognito entirely (recommended):** remove the escape hatch with a
+Chrome policy so Incognito can't be used at all. `1` = Incognito disabled.
+After applying, restart Chrome and confirm at `chrome://policy`; the
+"New Incognito window" menu item disappears. Combine with the force-install
+policy below for a tamper-resistant setup.
+
+#### Windows
+
+Option 1 — Registry (run as Administrator in an elevated Command Prompt):
+
+```
+reg add "HKLM\SOFTWARE\Policies\Google\Chrome" /v IncognitoModeAvailability /t REG_DWORD /d 1 /f
+```
+
+Or create the value manually with `regedit`:
+
+```
+HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Google\Chrome
+  IncognitoModeAvailability  (DWORD) = 1
+```
+
+Option 2 — Group Policy (after installing Chrome ADMX templates):
+`Computer Configuration → Administrative Templates → Google → Google Chrome`
+→ **Incognito mode availability** → *Enabled* → set to **Incognito mode disabled**.
+
+#### Ubuntu / Linux
+
+Chrome reads JSON policy files from a managed-policies directory. Create one as
+root (use `sudo`):
+
+For **Google Chrome**:
+
+```bash
+sudo mkdir -p /etc/opt/chrome/policies/managed
+echo '{ "IncognitoModeAvailability": 1 }' | sudo tee /etc/opt/chrome/policies/managed/parental.json
+sudo chmod 644 /etc/opt/chrome/policies/managed/parental.json
+```
+
+For **Chromium** (if that's what's installed), use the Chromium path instead:
+
+```bash
+sudo mkdir -p /etc/chromium/policies/managed
+echo '{ "IncognitoModeAvailability": 1 }' | sudo tee /etc/chromium/policies/managed/parental.json
+sudo chmod 644 /etc/chromium/policies/managed/parental.json
+```
+
+Then fully quit and relaunch the browser and verify at `chrome://policy`
+(or `chrome://policy` in Chromium). To keep the child from editing the file,
+make sure it is root-owned and not writable by their user account.
 
 
 

@@ -1,4 +1,4 @@
-import { CATEGORIES } from "./categories.js";
+import { CATEGORIES, DETECTION } from "./categories.js";
 import {
   getSettings,
   toDomain,
@@ -144,19 +144,41 @@ chrome.alarms.onAlarm.addListener((a) => {
   if (a.name === "flushTick") refreshSession();
 });
 
-// Messages from the content script (proxy-page heuristics) and pages.
+// Messages from the content script (content-based category detection).
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg?.type === "PROXY_DETECTED" && sender.tab?.id != null) {
+  // Content script asks which categories to look for + their keywords.
+  if (msg?.type === "GET_DETECTION_CONFIG") {
+    (async () => {
+      const settings = await getSettings();
+      const categories = {};
+      if (!isPaused(settings)) {
+        for (const [id, cfg] of Object.entries(DETECTION)) {
+          if (settings.categories?.[id]) categories[id] = cfg;
+        }
+      }
+      sendResponse({ categories });
+    })();
+    return true; // async response
+  }
+
+  // Content script detected that this page's content matches a category.
+  if (msg?.type === "CATEGORY_DETECTED" && sender.tab?.id != null) {
     (async () => {
       const settings = await getSettings();
       if (isPaused(settings)) return;
-      if (!settings.categories?.proxies) return;
+      const category = msg.category;
+      if (!settings.categories?.[category]) return;
+
       const domain = toDomain(sender.tab.url);
-      if (domain && domainMatches(domain, settings.allowlist || [])) return;
-      if (domain && isTempAllowed(settings, domain)) return;
-      recordBlocked(domain || "proxy", "proxy");
+      if (!domain) return;
+      if (domainMatches(domain, settings.allowlist || [])) return;
+      if (isTempAllowed(settings, domain)) return;
+
+      const reason = category === "proxies" ? "proxy" : "content";
+      recordBlocked(domain, reason, category);
       const target = chrome.runtime.getURL(
-        `blocked.html?site=${encodeURIComponent(domain || "proxy")}&reason=proxy`
+        `blocked.html?site=${encodeURIComponent(domain)}&reason=${reason}` +
+          `&cat=${encodeURIComponent(category)}`
       );
       chrome.tabs.update(sender.tab.id, { url: target });
     })();

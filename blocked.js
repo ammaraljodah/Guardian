@@ -1,13 +1,21 @@
 import { verifyPin, getSettings, saveSettings, toDomain } from "./store.js";
+import { CATEGORY_META } from "./stats.js";
 
 const params = new URLSearchParams(location.search);
 const site = params.get("site") || "this site";
 const reason = params.get("reason");
+const cat = params.get("cat");
 
 document.getElementById("site").textContent = site;
+const reasonEl = document.getElementById("reason");
 if (reason === "proxy") {
-  document.getElementById("reason").innerHTML =
+  reasonEl.innerHTML =
     'This looks like a <b>proxy / unblocker</b> page, which is blocked by your parental controls.';
+} else if (reason === "content") {
+  const label = (CATEGORY_META[cat] || CATEGORY_META.other).label;
+  reasonEl.innerHTML =
+    `This page's content matches the blocked <b>${label}</b> category, so it was ` +
+    "blocked by your parental controls.";
 }
 
 const form = document.getElementById("unlockForm");

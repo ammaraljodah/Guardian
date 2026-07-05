@@ -151,12 +151,12 @@ async function readLog(key, days) {
   return cutoff ? log.filter((e) => e.ts >= cutoff) : log;
 }
 
-export async function recordBlocked(domain, reason) {
+export async function recordBlocked(domain, reason, category) {
   if (!domain) return;
   await pushLog(BLOCKED_KEY, {
     ts: Date.now(),
     domain,
-    category: categoryOf(domain),
+    category: category || categoryOf(domain),
     reason: reason || "blocked"
   });
 }

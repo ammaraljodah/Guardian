@@ -169,6 +169,12 @@ function renderSearchLog(entries) {
   }
 }
 
+function reasonLabel(reason) {
+  if (reason === "proxy") return "Proxy page";
+  if (reason === "content") return "Content match";
+  return "Blocked site";
+}
+
 function renderBlockedLog(entries) {
   const body = $("blockedBody");
   body.innerHTML = "";
@@ -180,7 +186,7 @@ function renderBlockedLog(entries) {
       <td class="muted">${fmtTime(e.ts)}</td>
       <td>${e.domain}</td>
       <td><span class="badge" style="background:${meta.color}">${meta.label}</span></td>
-      <td class="muted">${e.reason === "proxy" ? "Proxy page" : "Blocked site"}</td>`;
+      <td class="muted">${reasonLabel(e.reason)}</td>`;
     body.appendChild(tr);
   }
 }
