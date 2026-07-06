@@ -4,6 +4,7 @@ import {
   saveSettings,
   setPin,
   verifyPin,
+  isManagedPin,
   toDomain,
   domainMatches
 } from "./store.js";
@@ -721,6 +722,13 @@ $("resumeBtn").addEventListener("click", async () => {
 
 $("changePinBtn").addEventListener("click", async () => {
   const msg = $("changeMsg");
+  const current = await getSettings();
+  if (isManagedPin(current)) {
+    msg.style.color = "var(--danger, #c00)";
+    msg.textContent =
+      "PIN is set by the administrator policy and cannot be changed here.";
+    return;
+  }
   const pin = $("changePin").value.trim();
   if (pin.length < 4) {
     msg.textContent = "PIN must be at least 4 characters.";

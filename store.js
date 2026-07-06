@@ -38,21 +38,55 @@ export function isTempAllowed(settings, domain) {
   );
 }
 
+// Admin-set configuration pushed through enterprise policy (chrome.storage.managed).
+// It is identical for every Chrome profile on the machine and cannot be changed by
+// the user, so using it as the source of truth stops each new profile from starting
+// fresh and prompting for its own PIN.
+async function getManaged() {
+  try {
+    if (!chrome.storage || !chrome.storage.managed) return {};
+    return (await chrome.storage.managed.get(null)) || {};
+  } catch (e) {
+    return {};
+  }
+}
+
+/** True when the PIN is fixed by the administrator via managed policy. */
+export function isManagedPin(settings) {
+  return !!(settings && settings.managed && settings.pinHash && settings.pinSalt);
+}
+
 export async function getSettings() {
   const data = await chrome.storage.local.get(KEY);
   const stored = data[KEY] || {};
+  const managed = await getManaged();
   const base = defaultSettings();
-  const customBlocked = [...(stored.customBlocked || base.customBlocked)];
+  const customBlocked = [
+    ...(managed.customBlocked || stored.customBlocked || base.customBlocked)
+  ];
   for (const d of DISCORD_DOMAINS) {
     if (!customBlocked.includes(d)) customBlocked.push(d);
   }
-  // Merge so newly added categories appear for existing users.
-  return {
+  const merged = {
     ...base,
     ...stored,
-    categories: { ...base.categories, ...(stored.categories || {}) },
+    categories: {
+      ...base.categories,
+      ...(stored.categories || {}),
+      ...(managed.categories || {})
+    },
     customBlocked
   };
+  if (Array.isArray(managed.allowlist)) merged.allowlist = managed.allowlist;
+  // A managed PIN wins over anything a profile set locally, and marks setup as
+  // done so no profile ever sees the "create a PIN" screen again.
+  if (managed.pinHash && managed.pinSalt) {
+    merged.pinHash = managed.pinHash;
+    merged.pinSalt = managed.pinSalt;
+    merged.setup = true;
+    merged.managed = true;
+  }
+  return merged;
 }
 
 export async function saveSettings(settings) {

@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "properties": {
+    "pinHash": {
+      "type": "string"
+    },
+    "pinSalt": {
+      "type": "string"
+    },
+    "categories": {
+      "type": "object",
+      "additionalProperties": { "type": "boolean" }
+    },
+    "customBlocked": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "allowlist": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "lockSettings": {
+      "type": "boolean"
+    }
+  }
+}

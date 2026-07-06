@@ -13,6 +13,9 @@
     "default_popup": "popup.html",
     "default_title": "Guardian"
   },
+  "storage": {
+    "managed_schema": "managed_schema.json"
+  },
   "options_page": "options.html",
   "content_scripts": [
     {
