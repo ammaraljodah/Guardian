@@ -189,12 +189,44 @@ echo "== Done =="
 echo "   Policy    : $POLICY_DIR/guardian.json"
 echo "   Host      : $HOST_DIR (Guardian.crx + update.xml)"
 echo "   Ext ID    : $EXT_ID"
+
+# --- Stop Chrome for ALL users before touching their profile files ---
 echo
-echo ">> Restarting Chrome..."
+echo ">> Stopping Chrome for all users..."
 pkill -f chrome 2>/dev/null || true
 sleep 2
+
+# --- Remove stale extension installs from every user's Chrome profiles ---
+# These are leftover IDs from earlier failed attempts plus the current ID, so
+# Chrome re-installs a clean 1.4.x from the policy on next launch and no profile
+# keeps an old copy (or an old locally-set PIN screen).
+STALE_IDS=(
+  "odlameecjipmbmbejkplpemijjgpljcea"
+  "nkhamemnhgfepknbkogoneejfegfonam"
+  "$EXT_ID"
+)
+echo ">> Cleaning old extension installs from all Chrome profiles..."
+shopt -s nullglob
+for home in /home/* /root; do
+  cfg="$home/.config/google-chrome"
+  [[ -d "$cfg" ]] || continue
+  for extroot in "$cfg"/*/Extensions; do
+    [[ -d "$extroot" ]] || continue
+    for id in "${STALE_IDS[@]}"; do
+      if [[ -d "$extroot/$id" ]]; then
+        rm -rf "$extroot/$id"
+        echo "   removed $extroot/$id"
+      fi
+    done
+  done
+done
+shopt -u nullglob
+
+echo
+echo ">> Restarting Chrome..."
 sudo -u "$REAL_USER" nohup "$CHROME_BIN" >/dev/null 2>&1 &
 
 echo
 echo "Next: open chrome://policy -> Reload policies, and confirm"
 echo "ExtensionInstallForcelist shows $EXT_ID with status OK."
+echo "Other users just need to reopen Chrome to get the fresh install."
