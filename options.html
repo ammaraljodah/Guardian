@@ -259,6 +259,52 @@
         font-size: 11px;
         color: #fff;
       }
+      .section-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-bottom: 6px;
+      }
+      .section-head h2 {
+        margin: 0;
+      }
+      .section-head button {
+        flex: none;
+        padding: 8px 12px;
+        font-size: 13px;
+      }
+      .history-actions {
+        white-space: nowrap;
+      }
+      .history-actions button {
+        padding: 4px 10px;
+        font-size: 12px;
+        margin-right: 6px;
+      }
+      .history-actions button:last-child {
+        margin-right: 0;
+      }
+      .pager {
+        display: none;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 12px;
+        margin-top: 12px;
+      }
+      .pager button {
+        padding: 4px 12px;
+        font-size: 13px;
+      }
+      .pager button:disabled {
+        opacity: 0.45;
+        cursor: default;
+      }
+      .pager-info {
+        font-size: 12px;
+        color: var(--muted, #94a3b8);
+      }
     </style>
   </head>
   <body>
@@ -359,7 +405,10 @@
           </section>
 
           <section class="card">
-            <h2>Visit history <span class="hint">every site visited, newest first</span></h2>
+            <div class="section-head">
+              <h2>Visit history <span class="hint">every site visited, newest first</span></h2>
+              <button id="unblockAllBtn" class="secondary" type="button">Clear custom blocks</button>
+            </div>
             <table>
               <thead>
                 <tr>
@@ -367,11 +416,13 @@
                   <th>Site</th>
                   <th>Category</th>
                   <th style="text-align: right">Hits</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody id="historyBody"></tbody>
             </table>
             <p id="historyEmpty" class="muted">No visits recorded yet.</p>
+            <div id="historyPager" class="pager"></div>
           </section>
 
           <section class="card">
@@ -387,6 +438,7 @@
               <tbody id="searchBody"></tbody>
             </table>
             <p id="searchEmpty" class="muted">No searches recorded yet.</p>
+            <div id="searchPager" class="pager"></div>
           </section>
 
           <section class="card">
@@ -403,6 +455,7 @@
               <tbody id="keyBody"></tbody>
             </table>
             <p id="keyEmpty" class="muted">No keyboard activity recorded yet.</p>
+            <div id="keyPager" class="pager"></div>
           </section>
 
           <section class="card">
@@ -419,6 +472,7 @@
               <tbody id="blockedBody"></tbody>
             </table>
             <p id="blockedEmpty" class="muted">No blocked attempts recorded yet.</p>
+            <div id="blockedPager" class="pager"></div>
           </section>
         </div>
 

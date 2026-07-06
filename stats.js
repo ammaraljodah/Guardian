@@ -2,6 +2,8 @@
 // Storage shape:  { "YYYY-MM-DD": { "domain.com": { visits, seconds } } }
 import { CATEGORIES } from "./categories.js";
 import { domainMatches } from "./store.js";
+import * as db from "./db.js";
+import { STORES } from "./db.js";
 
 const STATS_KEY = "guardianStats";
 
@@ -123,13 +125,7 @@ export function formatDuration(seconds) {
 
 /* ----------------------- Event logs (blocked/search) ------------------- */
 
-const BLOCKED_KEY = "guardianBlockedLog";
-const SEARCH_KEY = "guardianSearchLog";
-const VISIT_KEY = "guardianVisitLog";
-const KEY_LOG_KEY = "guardianKeyLog";
 export const KEY_BUCKET_MS = 3 * 60 * 1000;
-const LOG_CAP = 1000;
-const VISIT_CAP = 5000;
 
 // Timestamp for the start of the day `days-1` days ago (local). null = all time.
 function cutoffTs(days) {
@@ -140,55 +136,83 @@ function cutoffTs(days) {
   return d.getTime();
 }
 
-async function pushLog(key, entry) {
-  const o = await chrome.storage.local.get(key);
-  const log = o[key] || [];
-  log.unshift(entry);
-  if (log.length > LOG_CAP) log.length = LOG_CAP;
-  await chrome.storage.local.set({ [key]: log });
+/* ----- one-time migration of legacy chrome.storage.local arrays ----- */
+
+const LEGACY_KEYS = {
+  [STORES.visit]: "guardianVisitLog",
+  [STORES.search]: "guardianSearchLog",
+  [STORES.key]: "guardianKeyLog",
+  [STORES.blocked]: "guardianBlockedLog"
+};
+const MIGRATION_FLAG = "guardianLogsMigratedToIDB";
+
+export async function migrateLegacyLogs() {
+  const flag = await chrome.storage.local.get(MIGRATION_FLAG);
+  if (flag[MIGRATION_FLAG]) return;
+
+  const legacy = await chrome.storage.local.get(Object.values(LEGACY_KEYS));
+  for (const [store, key] of Object.entries(LEGACY_KEYS)) {
+    const arr = legacy[key];
+    if (!Array.isArray(arr) || arr.length === 0) continue;
+    // Legacy arrays are newest-first; reverse so oldest gets the lowest id
+    // and the ts index stays consistent with insertion order.
+    const ordered = arr.slice().reverse();
+    await db.bulkAdd(store, ordered);
+  }
+  await chrome.storage.local.set({ [MIGRATION_FLAG]: true });
+  await chrome.storage.local.remove(Object.values(LEGACY_KEYS));
 }
 
-async function readLog(key, days) {
-  const o = await chrome.storage.local.get(key);
-  const log = o[key] || [];
+// Paged read: { entries, total } newest-first for the given day range.
+export async function getLogPage(store, { days, offset = 0, limit = 500 }) {
   const cutoff = cutoffTs(days);
-  return cutoff ? log.filter((e) => e.ts >= cutoff) : log;
+  const [entries, total] = await Promise.all([
+    db.getPage(store, { cutoff, offset, limit }),
+    db.count(store, cutoff)
+  ]);
+  return { entries, total };
+}
+
+function getAllLog(store, days) {
+  return db.getAll(store, cutoffTs(days));
 }
 
 // Chronological "sites visited" history. Consecutive hits on the same domain
 // are collapsed into one entry (so reloads / multi-page browsing on one site
-// don't spam the list); we bump the last entry's timestamp instead.
+// don't spam the list); we bump the newest entry's timestamp/count instead.
 export async function recordVisitLog(domain, url) {
   if (!domain) return;
-  const o = await chrome.storage.local.get(VISIT_KEY);
-  const log = o[VISIT_KEY] || [];
-  if (log.length && log[0].domain === domain) {
-    log[0].ts = Date.now();
-    log[0].count = (log[0].count || 1) + 1;
+  const [last] = await db.getPage(STORES.visit, { offset: 0, limit: 1 });
+  if (last && last.domain === domain) {
+    last.ts = Date.now();
+    last.count = (last.count || 1) + 1;
+    await db.put(STORES.visit, last);
   } else {
-    log.unshift({
+    await db.add(STORES.visit, {
       ts: Date.now(),
       domain,
       category: categoryOf(domain),
       url: url || "",
       count: 1
     });
-    if (log.length > VISIT_CAP) log.length = VISIT_CAP;
   }
-  await chrome.storage.local.set({ [VISIT_KEY]: log });
 }
 
 export function getVisitLog(days) {
-  return readLog(VISIT_KEY, days);
+  return getAllLog(STORES.visit, days);
 }
 
-export async function clearVisitLog() {
-  await chrome.storage.local.set({ [VISIT_KEY]: [] });
+export function getVisitLogPage(opts) {
+  return getLogPage(STORES.visit, opts);
+}
+
+export function clearVisitLog() {
+  return db.clear(STORES.visit);
 }
 
 export async function recordBlocked(domain, reason, category) {
   if (!domain) return;
-  await pushLog(BLOCKED_KEY, {
+  await db.add(STORES.blocked, {
     ts: Date.now(),
     domain,
     category: category || categoryOf(domain),
@@ -197,11 +221,15 @@ export async function recordBlocked(domain, reason, category) {
 }
 
 export function getBlockedLog(days) {
-  return readLog(BLOCKED_KEY, days);
+  return getAllLog(STORES.blocked, days);
 }
 
-export async function clearBlockedLog() {
-  await chrome.storage.local.set({ [BLOCKED_KEY]: [] });
+export function getBlockedLogPage(opts) {
+  return getLogPage(STORES.blocked, opts);
+}
+
+export function clearBlockedLog() {
+  return db.clear(STORES.blocked);
 }
 
 // Known search engines / sites: hostname fragment -> query param (+ optional
@@ -294,15 +322,19 @@ export function extractSearch(urlStr) {
 
 export async function recordSearch(engine, query) {
   if (!query) return;
-  await pushLog(SEARCH_KEY, { ts: Date.now(), engine, query });
+  await db.add(STORES.search, { ts: Date.now(), engine, query });
 }
 
 export function getSearchLog(days) {
-  return readLog(SEARCH_KEY, days);
+  return getAllLog(STORES.search, days);
 }
 
-export async function clearSearchLog() {
-  await chrome.storage.local.set({ [SEARCH_KEY]: [] });
+export function getSearchLogPage(opts) {
+  return getLogPage(STORES.search, opts);
+}
+
+export function clearSearchLog() {
+  return db.clear(STORES.search);
 }
 
 const KEY_MODIFIERS = new Set(["Shift", "Control", "Alt", "Meta", "CapsLock"]);
@@ -325,24 +357,22 @@ export async function recordKeyPress({ downTs, upTs, key, domain }) {
   if (!domain || key == null) return;
 
   const bucket = keyBucketStart(downTs);
-  const o = await chrome.storage.local.get(KEY_LOG_KEY);
-  const log = o[KEY_LOG_KEY] || [];
-  const idx = log.findIndex((e) => e.domain === domain && e.bucket === bucket);
+  const entry = await db.getKeyBucket(domain, bucket);
 
-  if (idx >= 0) {
-    const entry = log[idx];
+  if (entry) {
     const prev = entry.text || "";
     const next = applyKey(prev, key);
     if (next === prev) return;
     entry.text = next;
     entry.upTs = upTs;
     entry.count = (entry.count || 0) + 1;
-    log.splice(idx, 1);
-    log.unshift(entry);
+    // Bump ts so this bucket sorts as the most recent activity.
+    entry.ts = downTs;
+    await db.put(STORES.key, entry);
   } else {
     const text = applyKey("", key);
     if (!text) return;
-    log.unshift({
+    await db.add(STORES.key, {
       ts: downTs,
       bucket,
       downTs,
@@ -352,15 +382,17 @@ export async function recordKeyPress({ downTs, upTs, key, domain }) {
       domain,
       category: categoryOf(domain)
     });
-    if (log.length > LOG_CAP) log.length = LOG_CAP;
   }
-  await chrome.storage.local.set({ [KEY_LOG_KEY]: log });
 }
 
 export function getKeyLog(days) {
-  return readLog(KEY_LOG_KEY, days);
+  return getAllLog(STORES.key, days);
 }
 
-export async function clearKeyLog() {
-  await chrome.storage.local.set({ [KEY_LOG_KEY]: [] });
+export function getKeyLogPage(opts) {
+  return getLogPage(STORES.key, opts);
+}
+
+export function clearKeyLog() {
+  return db.clear(STORES.key);
 }

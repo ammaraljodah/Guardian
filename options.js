@@ -4,7 +4,8 @@ import {
   saveSettings,
   setPin,
   verifyPin,
-  toDomain
+  toDomain,
+  domainMatches
 } from "./store.js";
 import {
   aggregate,
@@ -15,12 +16,22 @@ import {
   getBlockedLog,
   getVisitLog,
   getKeyLog,
+  getVisitLogPage,
+  getSearchLogPage,
+  getKeyLogPage,
+  getBlockedLogPage,
   clearSearchLog,
   clearBlockedLog,
   clearVisitLog,
   clearKeyLog,
+  migrateLegacyLogs,
   KEY_BUCKET_MS
 } from "./stats.js";
+
+const PAGE_SIZE = 500;
+
+// Current page (0-based) for each paginated log table.
+const logPage = { history: 0, search: 0, key: 0, blocked: 0 };
 
 const $ = (id) => document.getElementById(id);
 const setupView = $("setupView");
@@ -85,6 +96,9 @@ async function unlock() {
 
 async function openDashboard() {
   show(dashboard);
+  await migrateLegacyLogs().catch((e) =>
+    console.error("[Guardian] log migration failed:", e)
+  );
   await render();
   await renderStats();
 }
@@ -104,7 +118,17 @@ document.querySelectorAll(".tab").forEach((btn) => {
 
 /* ---------------------------- Statistics ------------------------------- */
 
-$("rangeSelect").addEventListener("change", renderStats);
+$("rangeSelect").addEventListener("change", () => {
+  resetLogPages();
+  renderStats();
+});
+
+function resetLogPages() {
+  logPage.history = 0;
+  logPage.search = 0;
+  logPage.key = 0;
+  logPage.blocked = 0;
+}
 
 $("clearStatsBtn").addEventListener("click", async () => {
   if (
@@ -119,11 +143,14 @@ $("clearStatsBtn").addEventListener("click", async () => {
       clearVisitLog(),
       clearKeyLog()
     ]);
+    resetLogPages();
     renderStats();
   }
 });
 
 $("exportBtn").addEventListener("click", exportCsv);
+
+$("unblockAllBtn").addEventListener("click", clearAllCustomBlocks);
 
 function currentDays() {
   const days = parseInt($("rangeSelect").value, 10);
@@ -145,10 +172,12 @@ async function renderStats() {
     renderLegend(byCategory, totalSeconds);
     renderSites(sites);
 
-    renderHistoryLog(await getVisitLog(days));
-    renderSearchLog(await getSearchLog(days));
-    renderKeyLog(await getKeyLog(days));
-    renderBlockedLog(await getBlockedLog(days));
+    await Promise.all([
+      renderHistoryPage(),
+      renderSearchPage(),
+      renderKeyPage(),
+      renderBlockedPage()
+    ]);
   } catch (err) {
     console.error("[Guardian] renderStats failed:", err);
     const empty = $("statsEmpty");
@@ -190,27 +219,145 @@ function displayKeyText(entry) {
   return "";
 }
 
-function renderHistoryLog(entries) {
+/* ------------------------- Paginated log tables ------------------------ */
+
+// Draw a "Prev  Page X of Y (N total)  Next" bar into the given container.
+// `key` is the logPage field; `onChange` re-renders the owning table.
+function renderPager(containerId, key, total, onChange) {
+  const el = $(containerId);
+  if (!el) return;
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  if (logPage[key] >= pages) logPage[key] = pages - 1;
+  const page = logPage[key];
+
+  if (total <= PAGE_SIZE) {
+    el.innerHTML = "";
+    el.style.display = "none";
+    return;
+  }
+  el.style.display = "flex";
+  el.innerHTML = "";
+
+  const prev = document.createElement("button");
+  prev.className = "secondary";
+  prev.textContent = "‹ Prev";
+  prev.disabled = page <= 0;
+  prev.addEventListener("click", () => {
+    if (logPage[key] > 0) {
+      logPage[key]--;
+      onChange();
+    }
+  });
+
+  const info = document.createElement("span");
+  info.className = "pager-info";
+  const from = page * PAGE_SIZE + 1;
+  const to = Math.min(total, (page + 1) * PAGE_SIZE);
+  info.textContent = `${from}–${to} of ${total} · page ${page + 1}/${pages}`;
+
+  const next = document.createElement("button");
+  next.className = "secondary";
+  next.textContent = "Next ›";
+  next.disabled = page >= pages - 1;
+  next.addEventListener("click", () => {
+    if (logPage[key] < pages - 1) {
+      logPage[key]++;
+      onChange();
+    }
+  });
+
+  el.appendChild(prev);
+  el.appendChild(info);
+  el.appendChild(next);
+}
+
+async function renderHistoryPage() {
+  const days = currentDays();
+  const settings = await getSettings();
+  const { entries, total } = await getVisitLogPage({
+    days,
+    offset: logPage.history * PAGE_SIZE,
+    limit: PAGE_SIZE
+  });
+  renderHistoryLog(entries, settings, total);
+  renderPager("historyPager", "history", total, renderHistoryPage);
+}
+
+async function renderSearchPage() {
+  const days = currentDays();
+  const { entries, total } = await getSearchLogPage({
+    days,
+    offset: logPage.search * PAGE_SIZE,
+    limit: PAGE_SIZE
+  });
+  renderSearchLog(entries, total);
+  renderPager("searchPager", "search", total, renderSearchPage);
+}
+
+async function renderKeyPage() {
+  const days = currentDays();
+  const { entries, total } = await getKeyLogPage({
+    days,
+    offset: logPage.key * PAGE_SIZE,
+    limit: PAGE_SIZE
+  });
+  renderKeyLog(entries, total);
+  renderPager("keyPager", "key", total, renderKeyPage);
+}
+
+async function renderBlockedPage() {
+  const days = currentDays();
+  const { entries, total } = await getBlockedLogPage({
+    days,
+    offset: logPage.blocked * PAGE_SIZE,
+    limit: PAGE_SIZE
+  });
+  renderBlockedLog(entries, total);
+  renderPager("blockedPager", "blocked", total, renderBlockedPage);
+}
+
+function renderHistoryLog(entries, settings, total = entries.length) {
   const body = $("historyBody");
   body.innerHTML = "";
-  $("historyEmpty").style.display = entries.length ? "none" : "block";
-  for (const e of entries.slice(0, 500)) {
+  $("historyEmpty").style.display = total ? "none" : "block";
+  for (const e of entries) {
     const meta = CATEGORY_META[e.category] || CATEGORY_META.other;
+    const allowed = domainMatches(e.domain, settings.allowlist || []);
+    const blocked = domainMatches(e.domain, settings.customBlocked || []);
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td class="muted">${fmtTime(e.ts)}</td>
       <td>${e.domain}</td>
       <td><span class="badge" style="background:${meta.color}">${meta.label}</span></td>
       <td class="num">${e.count || 1}</td>`;
+
+    const actions = document.createElement("td");
+    actions.className = "history-actions";
+
+    const allowBtn = document.createElement("button");
+    allowBtn.className = "secondary";
+    allowBtn.textContent = allowed ? "Allowed" : "Allow";
+    allowBtn.disabled = allowed;
+    allowBtn.addEventListener("click", () => alwaysAllow(e.domain));
+
+    const blockBtn = document.createElement("button");
+    blockBtn.className = "danger";
+    blockBtn.textContent = blocked ? "Blocked" : "Block";
+    blockBtn.disabled = blocked;
+    blockBtn.addEventListener("click", () => alwaysBlock(e.domain));
+
+    actions.appendChild(allowBtn);
+    actions.appendChild(blockBtn);
+    tr.appendChild(actions);
     body.appendChild(tr);
   }
 }
 
-function renderSearchLog(entries) {
+function renderSearchLog(entries, total = entries.length) {
   const body = $("searchBody");
   body.innerHTML = "";
-  $("searchEmpty").style.display = entries.length ? "none" : "block";
-  for (const e of entries.slice(0, 300)) {
+  $("searchEmpty").style.display = total ? "none" : "block";
+  for (const e of entries) {
     const tr = document.createElement("tr");
     const q = document.createElement("td");
     q.textContent = e.query; // textContent avoids HTML injection
@@ -220,11 +367,11 @@ function renderSearchLog(entries) {
   }
 }
 
-function renderKeyLog(entries) {
+function renderKeyLog(entries, total = entries.length) {
   const body = $("keyBody");
   body.innerHTML = "";
-  $("keyEmpty").style.display = entries.length ? "none" : "block";
-  for (const e of entries.slice(0, 300)) {
+  $("keyEmpty").style.display = total ? "none" : "block";
+  for (const e of entries) {
     const tr = document.createElement("tr");
     const text = displayKeyText(e);
     const textCell = document.createElement("td");
@@ -245,11 +392,11 @@ function reasonLabel(reason) {
   return "Blocked site";
 }
 
-function renderBlockedLog(entries) {
+function renderBlockedLog(entries, total = entries.length) {
   const body = $("blockedBody");
   body.innerHTML = "";
-  $("blockedEmpty").style.display = entries.length ? "none" : "block";
-  for (const e of entries.slice(0, 300)) {
+  $("blockedEmpty").style.display = total ? "none" : "block";
+  for (const e of entries) {
     const meta = CATEGORY_META[e.category] || CATEGORY_META.other;
     const tr = document.createElement("tr");
     tr.innerHTML = `
@@ -484,6 +631,41 @@ function renderList(containerId, items, onRemove) {
 }
 
 /* --------------------------- List mutations ---------------------------- */
+
+async function alwaysAllow(domain) {
+  const s = await getSettings();
+  if (!domainMatches(domain, s.allowlist)) s.allowlist.push(domain);
+  s.customBlocked = (s.customBlocked || []).filter(
+    (d) => !domainMatches(domain, [d])
+  );
+  await saveSettings(s);
+  await render();
+  await renderStats();
+}
+
+async function alwaysBlock(domain) {
+  const s = await getSettings();
+  if (!domainMatches(domain, s.customBlocked)) s.customBlocked.push(domain);
+  s.allowlist = (s.allowlist || []).filter((d) => !domainMatches(domain, [d]));
+  await saveSettings(s);
+  await render();
+  await renderStats();
+}
+
+async function clearAllCustomBlocks() {
+  if (
+    !confirm(
+      "Remove all custom blocked sites? Category rules still block matching sites unless you allow them."
+    )
+  ) {
+    return;
+  }
+  const s = await getSettings();
+  s.customBlocked = [];
+  await saveSettings(s);
+  await render();
+  await renderStats();
+}
 
 $("addBlockBtn").addEventListener("click", async () => {
   const input = $("blockInput");

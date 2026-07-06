@@ -12,8 +12,14 @@ import {
   recordBlocked,
   recordSearch,
   extractSearch,
-  recordKeyPress
+  recordKeyPress,
+  migrateLegacyLogs
 } from "./stats.js";
+
+// Move any pre-IndexedDB logs into the new database once, on service-worker boot.
+migrateLegacyLogs().catch((e) =>
+  console.error("[Guardian] log migration failed:", e)
+);
 
 /** Build the effective set of blocked base-domains from settings. */
 function buildBlocklist(settings) {
