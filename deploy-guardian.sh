@@ -131,25 +131,29 @@ echo ">> Writing policy in $POLICY_DIR"
 mkdir -p "$POLICY_DIR"
 rm -f "$POLICY_DIR/guardian_force.json" "$POLICY_DIR/guardian.json"
 
-# Build the managed-storage (3rdparty) block only when a PIN was provided.
-THIRDPARTY=""
+# Build the managed-storage (3rdparty) block. This is pushed to every profile and
+# cannot be changed by users. Games are force-blocked here so no profile can turn
+# them back on; the PIN fields are added only when a PIN was set.
+EXT_MANAGED='        "categories": { "games": true },
+        "lockSettings": true'
 if [[ -n "$PIN_JSON" ]]; then
   PIN_HASH="$(echo "$PIN_JSON" | python3 -c 'import sys,json;print(json.load(sys.stdin)["pinHash"])')"
   PIN_SALT="$(echo "$PIN_JSON" | python3 -c 'import sys,json;print(json.load(sys.stdin)["pinSalt"])')"
-  THIRDPARTY=$(cat <<EOF
+  EXT_MANAGED="        \"pinHash\": \"$PIN_HASH\",
+        \"pinSalt\": \"$PIN_SALT\",
+$EXT_MANAGED"
+fi
+THIRDPARTY=$(cat <<EOF
 ,
   "3rdparty": {
     "extensions": {
       "$EXT_ID": {
-        "pinHash": "$PIN_HASH",
-        "pinSalt": "$PIN_SALT",
-        "lockSettings": true
+$EXT_MANAGED
       }
     }
   }
 EOF
 )
-fi
 
 cat > "$POLICY_DIR/guardian.json" <<EOF
 {

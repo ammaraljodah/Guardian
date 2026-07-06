@@ -8,12 +8,13 @@ const DISCORD_DOMAINS = ["discord.com", "discord.gg", "discordapp.com"];
 function defaultSettings() {
   const categories = {};
   for (const id of Object.keys(CATEGORIES)) {
-    // Sensible defaults: adult, gambling, proxies, and social blocked out of the box.
+    // Sensible defaults: adult, gambling, proxies, social, and games blocked out of the box.
     categories[id] =
       id === "adult" ||
       id === "gambling" ||
       id === "proxies" ||
-      id === "social";
+      id === "social" ||
+      id === "games";
   }
   return {
     setup: false,
