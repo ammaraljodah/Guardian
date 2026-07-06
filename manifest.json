@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Guardian - Parental Site Blocker",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "PIN-protected parental control that blocks sites and whole categories (social, games, adult, proxies). Works behind VPNs and proxies.",
   "permissions": ["tabs", "storage", "unlimitedStorage", "webNavigation", "idle", "alarms", "scripting"],
   "host_permissions": ["<all_urls>"],
