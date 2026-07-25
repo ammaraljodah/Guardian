@@ -1,38 +1,22 @@
+/**
+ * Guardian parent dashboard — talks to the local FastAPI backend.
+ * Unified view of settings + logs across all Chrome profiles on this PC.
+ */
 import { CATEGORIES } from "./categories.js";
-import {
-  getSettings,
-  saveSettings,
-  setPin,
-  verifyPin,
-  isManagedPin,
-  toDomain,
-  domainMatches
-} from "./store.js";
-import {
-  aggregate,
-  clearStats,
-  formatDuration,
-  CATEGORY_META,
-  getSearchLog,
-  getBlockedLog,
-  getVisitLog,
-  getKeyLog,
-  getVisitLogPage,
-  getSearchLogPage,
-  getKeyLogPage,
-  getBlockedLogPage,
-  clearSearchLog,
-  clearBlockedLog,
-  clearVisitLog,
-  clearKeyLog,
-  migrateLegacyLogs,
-  KEY_BUCKET_MS
-} from "./stats.js";
 
 const PAGE_SIZE = 500;
-
-// Current page (0-based) for each paginated log table.
 const logPage = { history: 0, search: 0, key: 0, blocked: 0 };
+const KEY_BUCKET_MS = 3 * 60 * 1000;
+
+const CATEGORY_META = {
+  social: { label: "Social Media", color: "#5b8def" },
+  games: { label: "Games", color: "#7c5cff" },
+  video: { label: "Video / Streaming", color: "#22c55e" },
+  adult: { label: "Adult", color: "#ef4444" },
+  gambling: { label: "Gambling", color: "#f59e0b" },
+  proxies: { label: "Proxies", color: "#ec4899" },
+  other: { label: "Other", color: "#64748b" }
+};
 
 const $ = (id) => document.getElementById(id);
 const setupView = $("setupView");
@@ -44,19 +28,113 @@ function show(el) {
   el.classList.remove("hidden");
 }
 
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      ...(opts.headers || {})
+    },
+    ...opts
+  });
+  let data = null;
+  try {
+    data = await res.json();
+  } catch (e) {
+    data = null;
+  }
+  if (!res.ok) {
+    const detail = (data && (data.detail || data.error)) || res.statusText;
+    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+  }
+  return data;
+}
+
+function domainMatches(domain, list) {
+  if (!domain) return false;
+  return (list || []).some((b) => domain === b || domain.endsWith("." + b));
+}
+
+function toDomain(input) {
+  if (!input) return null;
+  let host = input;
+  try {
+    if (input.includes("://")) {
+      const url = new URL(input);
+      if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+      host = url.hostname;
+    }
+  } catch (e) {
+    return null;
+  }
+  host = host.trim().toLowerCase().replace(/^www\./, "");
+  return host || null;
+}
+
+function categoryOf(domain) {
+  for (const [id, cat] of Object.entries(CATEGORIES)) {
+    if (domainMatches(domain, cat.domains)) return id;
+  }
+  return "other";
+}
+
+function formatDuration(seconds) {
+  seconds = Math.round(seconds);
+  if (seconds < 60) return `${seconds}s`;
+  const m = Math.floor(seconds / 60);
+  if (m < 60) return `${m}m ${seconds % 60}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
+}
+
+function enrichStats(data) {
+  const sites = (data.sites || []).map((s) => ({
+    ...s,
+    category: categoryOf(s.domain)
+  }));
+  const byCategory = {};
+  let totalSeconds = 0;
+  let totalVisits = 0;
+  for (const s of sites) {
+    byCategory[s.category] = byCategory[s.category] || { seconds: 0, visits: 0 };
+    byCategory[s.category].seconds += s.seconds;
+    byCategory[s.category].visits += s.visits;
+    totalSeconds += s.seconds;
+    totalVisits += s.visits;
+  }
+  return { sites, byCategory, totalSeconds, totalVisits };
+}
+
+async function getSettings() {
+  return api("/api/settings");
+}
+
+async function saveSettings(partial) {
+  return api("/api/settings", { method: "PUT", body: JSON.stringify(partial) });
+}
+
 /* ------------------------------ Boot flow ------------------------------ */
 
 async function boot() {
-  const settings = await getSettings();
-  if (!settings.setup) {
-    show(setupView);
-  } else {
+  try {
+    const st = await fetch("/api/setup-status").then((r) => r.json());
+    if (!st.setup) {
+      show(setupView);
+      return;
+    }
+  } catch (e) {
+    document.body.innerHTML =
+      "<p style='padding:2rem;font-family:sans-serif'>Guardian backend is not reachable. Start the backend service, then reload.</p>";
+    return;
+  }
+  try {
+    await getSettings();
+    await openDashboard();
+  } catch (e) {
     show(lockView);
     $("lockPin").focus();
   }
 }
-
-/* ---------------------------- Setup / lock ----------------------------- */
 
 $("createPinBtn").addEventListener("click", async () => {
   const pin = $("newPin").value.trim();
@@ -71,8 +149,15 @@ $("createPinBtn").addEventListener("click", async () => {
     err.textContent = "PINs do not match.";
     return;
   }
-  await setPin(pin);
-  await openDashboard();
+  try {
+    await api("/api/auth/setup", {
+      method: "POST",
+      body: JSON.stringify({ pin, confirm })
+    });
+    await openDashboard();
+  } catch (e) {
+    err.textContent = e.message;
+  }
 });
 
 $("unlockBtn").addEventListener("click", unlock);
@@ -84,27 +169,24 @@ async function unlock() {
   const err = $("lockError");
   err.textContent = "";
   const pin = $("lockPin").value.trim();
-  if (await verifyPin(pin)) {
+  try {
+    await api("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ pin })
+    });
     $("lockPin").value = "";
     await openDashboard();
-  } else {
+  } catch (e) {
     err.textContent = "Incorrect PIN.";
     $("lockPin").value = "";
   }
 }
 
-/* ----------------------------- Dashboard ------------------------------- */
-
 async function openDashboard() {
   show(dashboard);
-  await migrateLegacyLogs().catch((e) =>
-    console.error("[Guardian] log migration failed:", e)
-  );
   await render();
   await renderStats();
 }
-
-/* ------------------------------- Tabs ---------------------------------- */
 
 document.querySelectorAll(".tab").forEach((btn) => {
   btn.addEventListener("click", () => {
@@ -116,8 +198,6 @@ document.querySelectorAll(".tab").forEach((btn) => {
     if (tab === "stats") renderStats();
   });
 });
-
-/* ---------------------------- Statistics ------------------------------- */
 
 $("rangeSelect").addEventListener("change", () => {
   resetLogPages();
@@ -133,24 +213,24 @@ function resetLogPages() {
 
 $("clearStatsBtn").addEventListener("click", async () => {
   if (
-    confirm(
+    !confirm(
       "Clear all recorded statistics, searches, keyboard activity and blocked attempts? This cannot be undone."
     )
   ) {
-    await Promise.all([
-      clearStats(),
-      clearSearchLog(),
-      clearBlockedLog(),
-      clearVisitLog(),
-      clearKeyLog()
-    ]);
-    resetLogPages();
-    renderStats();
+    return;
   }
+  await Promise.all([
+    api("/api/stats", { method: "DELETE" }),
+    api("/api/logs/search", { method: "DELETE" }),
+    api("/api/logs/blocked", { method: "DELETE" }),
+    api("/api/logs/visit", { method: "DELETE" }),
+    api("/api/logs/key", { method: "DELETE" })
+  ]);
+  resetLogPages();
+  renderStats();
 });
 
 $("exportBtn").addEventListener("click", exportCsv);
-
 $("unblockAllBtn").addEventListener("click", clearAllCustomBlocks);
 
 function currentDays() {
@@ -158,16 +238,38 @@ function currentDays() {
   return days === 0 ? null : days;
 }
 
+function cutoffTs(days) {
+  if (!days || days <= 0) return null;
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - (days - 1));
+  return d.getTime();
+}
+
+async function getLogPage(store, { days, offset = 0, limit = 500 }) {
+  const cutoff = cutoffTs(days);
+  const q = new URLSearchParams({ cmd: "getPage", offset, limit });
+  if (cutoff) q.set("cutoff", String(cutoff));
+  const countQ = new URLSearchParams({ cmd: "count" });
+  if (cutoff) countQ.set("cutoff", String(cutoff));
+  const [page, count] = await Promise.all([
+    api(`/api/logs/${store}?${q}`),
+    api(`/api/logs/${store}?${countQ}`)
+  ]);
+  return { entries: page.entries || [], total: count.count || 0 };
+}
+
 async function renderStats() {
   try {
     const days = currentDays();
-    const { sites, byCategory, totalSeconds, totalVisits } = await aggregate(
-      days
-    );
+    const q = days == null ? "" : `?days=${days}`;
+    const raw = await api(`/api/stats${q}`);
+    const { sites, byCategory, totalSeconds, totalVisits } = enrichStats(raw);
 
     $("kpiTime").textContent = formatDuration(totalSeconds);
-    $("kpiVisits").textContent = totalVisits;
-    $("kpiSites").textContent = sites.length;
+    $("kpiVisits").textContent = String(totalVisits);
+    $("kpiSites").textContent = String(sites.length);
+    $("statsEmpty").style.display = sites.length ? "none" : "block";
 
     renderDonut(byCategory, totalSeconds);
     renderLegend(byCategory, totalSeconds);
@@ -181,113 +283,72 @@ async function renderStats() {
     ]);
   } catch (err) {
     console.error("[Guardian] renderStats failed:", err);
-    const empty = $("statsEmpty");
-    if (empty) {
-      empty.style.display = "block";
-      empty.textContent = "Could not load statistics: " + err.message;
-    }
   }
 }
 
 function fmtTime(ts) {
-  return new Date(ts).toLocaleString([], {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit"
-  });
+  try {
+    return new Date(ts).toLocaleString();
+  } catch (e) {
+    return String(ts);
+  }
 }
 
 function fmtTimeSec(ts) {
-  return new Date(ts).toLocaleString([], {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit"
-  });
+  try {
+    return new Date(ts).toLocaleTimeString();
+  } catch (e) {
+    return String(ts);
+  }
 }
 
 function fmtKeyBucket(entry) {
-  const start = entry.bucket ?? entry.downTs;
-  const end = start + KEY_BUCKET_MS;
-  return `${fmtTimeSec(start)} – ${fmtTimeSec(end)}`;
+  const start = entry.bucket || entry.downTs || entry.ts;
+  const end = (entry.upTs || start) + 1;
+  return `${fmtTime(start)} – ${fmtTimeSec(end)}`;
 }
 
 function displayKeyText(entry) {
-  if (entry.text != null) return entry.text;
-  if (entry.key != null) return entry.key.length === 1 ? entry.key : `[${entry.key}]`;
-  return "";
+  return (entry.text || "").replace(/\n/g, "↵ ").replace(/\t/g, "→ ");
 }
 
-/* ------------------------- Paginated log tables ------------------------ */
-
-// Draw a "Prev  Page X of Y (N total)  Next" bar into the given container.
-// `key` is the logPage field; `onChange` re-renders the owning table.
 function renderPager(containerId, key, total, onChange) {
   const el = $(containerId);
   if (!el) return;
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  if (logPage[key] >= pages) logPage[key] = pages - 1;
   const page = logPage[key];
-
   if (total <= PAGE_SIZE) {
-    el.innerHTML = "";
     el.style.display = "none";
+    el.innerHTML = "";
     return;
   }
   el.style.display = "flex";
-  el.innerHTML = "";
-
-  const prev = document.createElement("button");
-  prev.className = "secondary";
-  prev.textContent = "‹ Prev";
-  prev.disabled = page <= 0;
-  prev.addEventListener("click", () => {
-    if (logPage[key] > 0) {
-      logPage[key]--;
+  el.innerHTML = `
+    <button type="button" data-dir="-1" ${page <= 0 ? "disabled" : ""}>Prev</button>
+    <span class="pager-info">Page ${page + 1} / ${pages} (${total})</span>
+    <button type="button" data-dir="1" ${page + 1 >= pages ? "disabled" : ""}>Next</button>`;
+  el.querySelectorAll("button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      logPage[key] = Math.max(0, page + parseInt(btn.dataset.dir, 10));
       onChange();
-    }
+    });
   });
-
-  const info = document.createElement("span");
-  info.className = "pager-info";
-  const from = page * PAGE_SIZE + 1;
-  const to = Math.min(total, (page + 1) * PAGE_SIZE);
-  info.textContent = `${from}–${to} of ${total} · page ${page + 1}/${pages}`;
-
-  const next = document.createElement("button");
-  next.className = "secondary";
-  next.textContent = "Next ›";
-  next.disabled = page >= pages - 1;
-  next.addEventListener("click", () => {
-    if (logPage[key] < pages - 1) {
-      logPage[key]++;
-      onChange();
-    }
-  });
-
-  el.appendChild(prev);
-  el.appendChild(info);
-  el.appendChild(next);
 }
 
 async function renderHistoryPage() {
-  const days = currentDays();
-  const settings = await getSettings();
-  const { entries, total } = await getVisitLogPage({
-    days,
+  const { entries, total } = await getLogPage("visit", {
+    days: currentDays(),
     offset: logPage.history * PAGE_SIZE,
     limit: PAGE_SIZE
   });
+  const settings = await getSettings();
   renderHistoryLog(entries, settings, total);
   renderPager("historyPager", "history", total, renderHistoryPage);
 }
 
 async function renderSearchPage() {
-  const days = currentDays();
-  const { entries, total } = await getSearchLogPage({
-    days,
+  const { entries, total } = await getLogPage("search", {
+    days: currentDays(),
     offset: logPage.search * PAGE_SIZE,
     limit: PAGE_SIZE
   });
@@ -296,9 +357,8 @@ async function renderSearchPage() {
 }
 
 async function renderKeyPage() {
-  const days = currentDays();
-  const { entries, total } = await getKeyLogPage({
-    days,
+  const { entries, total } = await getLogPage("key", {
+    days: currentDays(),
     offset: logPage.key * PAGE_SIZE,
     limit: PAGE_SIZE
   });
@@ -307,9 +367,8 @@ async function renderKeyPage() {
 }
 
 async function renderBlockedPage() {
-  const days = currentDays();
-  const { entries, total } = await getBlockedLogPage({
-    days,
+  const { entries, total } = await getLogPage("blocked", {
+    days: currentDays(),
     offset: logPage.blocked * PAGE_SIZE,
     limit: PAGE_SIZE
   });
@@ -323,35 +382,24 @@ function renderHistoryLog(entries, settings, total = entries.length) {
   $("historyEmpty").style.display = total ? "none" : "block";
   for (const e of entries) {
     const meta = CATEGORY_META[e.category] || CATEGORY_META.other;
-    const allowed = domainMatches(e.domain, settings.allowlist || []);
-    const blocked = domainMatches(e.domain, settings.customBlocked || []);
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td class="muted">${fmtTime(e.ts)}</td>
+      <td>${fmtTime(e.ts)}</td>
       <td>${e.domain}</td>
       <td><span class="badge" style="background:${meta.color}">${meta.label}</span></td>
-      <td class="num">${e.count || 1}</td>`;
-
-    const actions = document.createElement("td");
-    actions.className = "history-actions";
-
-    const allowBtn = document.createElement("button");
-    allowBtn.className = "secondary";
-    allowBtn.textContent = allowed ? "Allowed" : "Allow";
-    allowBtn.disabled = allowed;
-    allowBtn.addEventListener("click", () => alwaysAllow(e.domain));
-
-    const blockBtn = document.createElement("button");
-    blockBtn.className = "danger";
-    blockBtn.textContent = blocked ? "Blocked" : "Block";
-    blockBtn.disabled = blocked;
-    blockBtn.addEventListener("click", () => alwaysBlock(e.domain));
-
-    actions.appendChild(allowBtn);
-    actions.appendChild(blockBtn);
-    tr.appendChild(actions);
+      <td class="num">${e.count || 1}</td>
+      <td class="history-actions">
+        <button type="button" class="secondary" data-allow="${e.domain}">Allow</button>
+        <button type="button" class="danger" data-block="${e.domain}">Block</button>
+      </td>`;
     body.appendChild(tr);
   }
+  body.querySelectorAll("[data-allow]").forEach((btn) => {
+    btn.addEventListener("click", () => alwaysAllow(btn.dataset.allow));
+  });
+  body.querySelectorAll("[data-block]").forEach((btn) => {
+    btn.addEventListener("click", () => alwaysBlock(btn.dataset.block));
+  });
 }
 
 function renderSearchLog(entries, total = entries.length) {
@@ -360,10 +408,10 @@ function renderSearchLog(entries, total = entries.length) {
   $("searchEmpty").style.display = total ? "none" : "block";
   for (const e of entries) {
     const tr = document.createElement("tr");
-    const q = document.createElement("td");
-    q.textContent = e.query; // textContent avoids HTML injection
-    tr.innerHTML = `<td class="muted">${fmtTime(e.ts)}</td><td>${e.engine}</td>`;
-    tr.appendChild(q);
+    tr.innerHTML = `
+      <td>${fmtTime(e.ts)}</td>
+      <td>${e.engine || ""}</td>
+      <td>${e.query || ""}</td>`;
     body.appendChild(tr);
   }
 }
@@ -374,23 +422,19 @@ function renderKeyLog(entries, total = entries.length) {
   $("keyEmpty").style.display = total ? "none" : "block";
   for (const e of entries) {
     const tr = document.createElement("tr");
-    const text = displayKeyText(e);
-    const textCell = document.createElement("td");
-    textCell.textContent = text;
-    textCell.title = text;
     tr.innerHTML = `
-      <td class="muted">${fmtKeyBucket(e)}</td>
-      <td>${e.domain}</td>
-      <td class="num">${e.count || 1}</td>`;
-    tr.appendChild(textCell);
+      <td>${fmtKeyBucket(e)}</td>
+      <td>${e.domain || ""}</td>
+      <td class="num">${e.count || 0}</td>
+      <td style="font-family:monospace;font-size:12px;white-space:pre-wrap">${displayKeyText(e)}</td>`;
     body.appendChild(tr);
   }
 }
 
 function reasonLabel(reason) {
-  if (reason === "proxy") return "Proxy page";
+  if (reason === "proxy") return "Proxy / unblocker";
   if (reason === "content") return "Content match";
-  return "Blocked site";
+  return "Blocked";
 }
 
 function renderBlockedLog(entries, total = entries.length) {
@@ -401,37 +445,44 @@ function renderBlockedLog(entries, total = entries.length) {
     const meta = CATEGORY_META[e.category] || CATEGORY_META.other;
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td class="muted">${fmtTime(e.ts)}</td>
+      <td>${fmtTime(e.ts)}</td>
       <td>${e.domain}</td>
       <td><span class="badge" style="background:${meta.color}">${meta.label}</span></td>
-      <td class="muted">${reasonLabel(e.reason)}</td>`;
+      <td>${reasonLabel(e.reason)}</td>`;
     body.appendChild(tr);
   }
 }
 
 function csvCell(v) {
   const s = String(v ?? "");
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
 }
 
 async function exportCsv() {
   const days = currentDays();
-  const { sites } = await aggregate(days);
-  const history = await getVisitLog(days);
-  const searches = await getSearchLog(days);
-  const keys = await getKeyLog(days);
-  const blocked = await getBlockedLog(days);
+  const q = days == null ? "" : `?days=${days}`;
+  const raw = await api(`/api/stats${q}`);
+  const { sites } = enrichStats(raw);
+  const cutoff = cutoffTs(days);
+  const cq = new URLSearchParams({ cmd: "getAll" });
+  if (cutoff) cq.set("cutoff", String(cutoff));
+
+  const [visits, searches, keys, blocked] = await Promise.all([
+    api(`/api/logs/visit?${cq}`),
+    api(`/api/logs/search?${cq}`),
+    api(`/api/logs/key?${cq}`),
+    api(`/api/logs/blocked?${cq}`)
+  ]);
 
   const lines = [];
-  lines.push("SITES");
   lines.push(["domain", "category", "visits", "seconds"].join(","));
   for (const s of sites) {
     lines.push([s.domain, s.category, s.visits, s.seconds].map(csvCell).join(","));
   }
   lines.push("");
-  lines.push("VISIT_HISTORY");
   lines.push(["timestamp", "domain", "category", "hits", "url"].join(","));
-  for (const e of history) {
+  for (const e of visits.entries || []) {
     lines.push(
       [new Date(e.ts).toISOString(), e.domain, e.category, e.count || 1, e.url || ""]
         .map(csvCell)
@@ -439,112 +490,82 @@ async function exportCsv() {
     );
   }
   lines.push("");
-  lines.push("SEARCHES");
   lines.push(["timestamp", "engine", "query"].join(","));
-  for (const e of searches) {
+  for (const e of searches.entries || []) {
     lines.push(
-      [new Date(e.ts).toISOString(), e.engine, e.query].map(csvCell).join(",")
+      [new Date(e.ts).toISOString(), e.engine || "", e.query || ""].map(csvCell).join(",")
     );
   }
   lines.push("");
-  lines.push("KEYBOARD");
-  lines.push(["period_start", "period_end", "domain", "keystrokes", "text"].join(","));
-  for (const e of keys) {
-    const start = e.bucket ?? e.downTs;
-    const end = start + KEY_BUCKET_MS;
+  lines.push(["timestamp", "domain", "keys", "text"].join(","));
+  for (const e of keys.entries || []) {
     lines.push(
-      [
-        new Date(start).toISOString(),
-        new Date(end).toISOString(),
-        e.domain,
-        e.count || 1,
-        displayKeyText(e)
-      ]
+      [new Date(e.ts).toISOString(), e.domain || "", e.count || 0, e.text || ""]
         .map(csvCell)
         .join(",")
     );
   }
   lines.push("");
-  lines.push("BLOCKED_ATTEMPTS");
   lines.push(["timestamp", "domain", "category", "reason"].join(","));
-  for (const e of blocked) {
+  for (const e of blocked.entries || []) {
     lines.push(
-      [new Date(e.ts).toISOString(), e.domain, e.category, e.reason]
-        .map(csvCell)
-        .join(",")
+      [new Date(e.ts).toISOString(), e.domain, e.category, e.reason].map(csvCell).join(",")
     );
   }
 
   const blob = new Blob([lines.join("\n")], { type: "text/csv" });
-  const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  const label = days ? `${days}d` : "all";
-  a.href = url;
-  a.download = `guardian-report-${label}-${Date.now()}.csv`;
-  document.body.appendChild(a);
+  a.href = URL.createObjectURL(blob);
+  a.download = `guardian-export-${new Date().toISOString().slice(0, 10)}.csv`;
   a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+  URL.revokeObjectURL(a.href);
 }
 
 function renderDonut(byCategory, totalSeconds) {
-  const donut = $("donut");
+  const el = $("donut");
   const center = $("donutCenter");
-  const entries = Object.entries(byCategory)
-    .filter(([, v]) => v.seconds > 0)
-    .sort((a, b) => b[1].seconds - a[1].seconds);
-
-  if (totalSeconds <= 0 || entries.length === 0) {
-    donut.style.background = "#33406b";
+  if (!totalSeconds) {
+    el.style.background = "var(--border)";
     center.textContent = "No data";
     return;
   }
-
-  let acc = 0;
-  const segments = entries.map(([cat, v]) => {
-    const start = (acc / totalSeconds) * 360;
-    acc += v.seconds;
-    const end = (acc / totalSeconds) * 360;
-    const color = (CATEGORY_META[cat] || CATEGORY_META.other).color;
-    return `${color} ${start}deg ${end}deg`;
-  });
-  donut.style.background = `conic-gradient(${segments.join(", ")})`;
+  let cursor = 0;
+  const parts = [];
+  for (const [id, rec] of Object.entries(byCategory)) {
+    const meta = CATEGORY_META[id] || CATEGORY_META.other;
+    const pct = (rec.seconds / totalSeconds) * 360;
+    parts.push(`${meta.color} ${cursor}deg ${cursor + pct}deg`);
+    cursor += pct;
+  }
+  el.style.background = `conic-gradient(${parts.join(",")})`;
   center.textContent = formatDuration(totalSeconds);
 }
 
 function renderLegend(byCategory, totalSeconds) {
-  const legend = $("legend");
-  legend.innerHTML = "";
+  const el = $("legend");
+  el.innerHTML = "";
   const entries = Object.entries(byCategory).sort(
     (a, b) => b[1].seconds - a[1].seconds
   );
-  if (entries.length === 0) {
-    legend.innerHTML = `<span class="muted">Nothing tracked in this period.</span>`;
-    return;
-  }
-  for (const [cat, v] of entries) {
-    const meta = CATEGORY_META[cat] || CATEGORY_META.other;
-    const pct = totalSeconds > 0 ? Math.round((v.seconds / totalSeconds) * 100) : 0;
-    const li = document.createElement("div");
-    li.className = "li";
-    li.innerHTML = `
+  for (const [id, rec] of entries) {
+    const meta = CATEGORY_META[id] || CATEGORY_META.other;
+    const pct = totalSeconds
+      ? Math.round((rec.seconds / totalSeconds) * 100)
+      : 0;
+    const row = document.createElement("div");
+    row.className = "li";
+    row.innerHTML = `
       <span class="dot" style="background:${meta.color}"></span>
       <span>${meta.label}</span>
-      <span class="v">${formatDuration(v.seconds)} · ${pct}%</span>`;
-    legend.appendChild(li);
+      <span class="v">${formatDuration(rec.seconds)} (${pct}%)</span>`;
+    el.appendChild(row);
   }
 }
 
 function renderSites(sites) {
   const body = $("sitesBody");
-  const empty = $("statsEmpty");
   body.innerHTML = "";
-  if (sites.length === 0) {
-    empty.style.display = "block";
-    return;
-  }
-  empty.style.display = "none";
-  for (const s of sites.slice(0, 100)) {
+  for (const s of sites) {
     const meta = CATEGORY_META[s.category] || CATEGORY_META.other;
     const tr = document.createElement("tr");
     tr.innerHTML = `
@@ -603,8 +624,8 @@ function renderCategories(settings) {
   wrap.querySelectorAll("input[data-cat]").forEach((cb) => {
     cb.addEventListener("change", async () => {
       const s = await getSettings();
-      s.categories[cb.dataset.cat] = cb.checked;
-      await saveSettings(s);
+      const categories = { ...s.categories, [cb.dataset.cat]: cb.checked };
+      await saveSettings({ categories });
     });
   });
 }
@@ -631,24 +652,24 @@ function renderList(containerId, items, onRemove) {
   });
 }
 
-/* --------------------------- List mutations ---------------------------- */
-
 async function alwaysAllow(domain) {
   const s = await getSettings();
-  if (!domainMatches(domain, s.allowlist)) s.allowlist.push(domain);
-  s.customBlocked = (s.customBlocked || []).filter(
+  const allowlist = [...(s.allowlist || [])];
+  if (!domainMatches(domain, allowlist)) allowlist.push(domain);
+  const customBlocked = (s.customBlocked || []).filter(
     (d) => !domainMatches(domain, [d])
   );
-  await saveSettings(s);
+  await saveSettings({ allowlist, customBlocked });
   await render();
   await renderStats();
 }
 
 async function alwaysBlock(domain) {
   const s = await getSettings();
-  if (!domainMatches(domain, s.customBlocked)) s.customBlocked.push(domain);
-  s.allowlist = (s.allowlist || []).filter((d) => !domainMatches(domain, [d]));
-  await saveSettings(s);
+  const customBlocked = [...(s.customBlocked || [])];
+  if (!domainMatches(domain, customBlocked)) customBlocked.push(domain);
+  const allowlist = (s.allowlist || []).filter((d) => !domainMatches(domain, [d]));
+  await saveSettings({ allowlist, customBlocked });
   await render();
   await renderStats();
 }
@@ -661,9 +682,7 @@ async function clearAllCustomBlocks() {
   ) {
     return;
   }
-  const s = await getSettings();
-  s.customBlocked = [];
-  await saveSettings(s);
+  await saveSettings({ customBlocked: [] });
   await render();
   await renderStats();
 }
@@ -673,8 +692,9 @@ $("addBlockBtn").addEventListener("click", async () => {
   const domain = toDomain(input.value) || input.value.trim().toLowerCase();
   if (!domain) return;
   const s = await getSettings();
-  if (!s.customBlocked.includes(domain)) s.customBlocked.push(domain);
-  await saveSettings(s);
+  const customBlocked = [...(s.customBlocked || [])];
+  if (!customBlocked.includes(domain)) customBlocked.push(domain);
+  await saveSettings({ customBlocked });
   input.value = "";
   render();
 });
@@ -684,60 +704,61 @@ $("addAllowBtn").addEventListener("click", async () => {
   const domain = toDomain(input.value) || input.value.trim().toLowerCase();
   if (!domain) return;
   const s = await getSettings();
-  if (!s.allowlist.includes(domain)) s.allowlist.push(domain);
-  await saveSettings(s);
+  const allowlist = [...(s.allowlist || [])];
+  if (!allowlist.includes(domain)) allowlist.push(domain);
+  await saveSettings({ allowlist });
   input.value = "";
   render();
 });
 
 async function removeBlocked(domain) {
   const s = await getSettings();
-  s.customBlocked = s.customBlocked.filter((d) => d !== domain);
-  await saveSettings(s);
+  await saveSettings({
+    customBlocked: (s.customBlocked || []).filter((d) => d !== domain)
+  });
   render();
 }
 
 async function removeAllowed(domain) {
   const s = await getSettings();
-  s.allowlist = s.allowlist.filter((d) => d !== domain);
-  await saveSettings(s);
+  await saveSettings({
+    allowlist: (s.allowlist || []).filter((d) => d !== domain)
+  });
   render();
 }
 
-/* ----------------------------- Pause/PIN ------------------------------- */
-
 $("pauseBtn").addEventListener("click", async () => {
-  const s = await getSettings();
-  s.pausedUntil = Date.now() + 15 * 60 * 1000;
-  await saveSettings(s);
+  await api("/api/pause", {
+    method: "POST",
+    body: JSON.stringify({ minutes: 15, resume: false })
+  });
   render();
 });
 
 $("resumeBtn").addEventListener("click", async () => {
-  const s = await getSettings();
-  s.pausedUntil = 0;
-  await saveSettings(s);
+  await api("/api/pause", {
+    method: "POST",
+    body: JSON.stringify({ resume: true })
+  });
   render();
 });
 
 $("changePinBtn").addEventListener("click", async () => {
   const msg = $("changeMsg");
-  const current = await getSettings();
-  if (isManagedPin(current)) {
-    msg.style.color = "var(--danger, #c00)";
-    msg.textContent =
-      "PIN is set by the administrator policy and cannot be changed here.";
-    return;
-  }
   const pin = $("changePin").value.trim();
   if (pin.length < 4) {
     msg.textContent = "PIN must be at least 4 characters.";
     return;
   }
-  await setPin(pin);
-  $("changePin").value = "";
-  msg.style.color = "var(--ok)";
-  msg.textContent = "PIN updated.";
+  try {
+    await saveSettings({ pin });
+    $("changePin").value = "";
+    msg.style.color = "var(--ok)";
+    msg.textContent = "PIN updated.";
+  } catch (e) {
+    msg.style.color = "var(--danger, #c00)";
+    msg.textContent = e.message;
+  }
 });
 
 boot();

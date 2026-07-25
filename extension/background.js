@@ -1,9 +1,11 @@
 import { CATEGORIES, DETECTION } from "./categories.js";
 import {
   getSettings,
+  syncSettingsFromServer,
   toDomain,
   domainMatches,
-  isTempAllowed
+  isTempAllowed,
+  API_BASE
 } from "./store.js";
 import {
   recordVisit,
@@ -15,11 +17,17 @@ import {
   recordKeyPress,
   migrateLegacyLogs
 } from "./stats.js";
+import { resetApiProbe } from "./db.js";
 
-// Move any pre-IndexedDB logs into the new database once, on service-worker boot.
+// Move any pre-IndexedDB logs into storage once, on service-worker boot.
 migrateLegacyLogs().catch((e) =>
   console.error("[Guardian] log migration failed:", e)
 );
+
+// Keep a local mirror of machine-wide settings from the Python backend.
+syncSettingsFromServer().catch(() => {});
+chrome.alarms.create("settingsSync", { periodInMinutes: 1 });
+chrome.alarms.create("apiProbe", { periodInMinutes: 1 });
 
 /** Build the effective set of blocked base-domains from settings. */
 function buildBlocklist(settings) {
@@ -193,6 +201,11 @@ chrome.idle.onStateChanged.addListener((state) => {
 chrome.alarms.create("flushTick", { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener((a) => {
   if (a.name === "flushTick") refreshSession();
+  if (a.name === "settingsSync") syncSettingsFromServer().catch(() => {});
+  if (a.name === "apiProbe") {
+    resetApiProbe();
+    syncSettingsFromServer().catch(() => {});
+  }
 });
 
 // Messages from the content script (content-based category detection).
@@ -254,9 +267,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   return false;
 });
 
-// First install -> open setup so a parent can create a PIN.
+// First install -> open parent dashboard (LAN) so a parent can create a PIN.
 chrome.runtime.onInstalled.addListener(async (details) => {
   if (details.reason === "install") {
-    chrome.tabs.create({ url: chrome.runtime.getURL("options.html") });
+    chrome.tabs.create({ url: API_BASE.replace(/\/$/, "") + "/" });
   }
+  syncSettingsFromServer().catch(() => {});
 });

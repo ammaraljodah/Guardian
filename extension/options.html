@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Guardian - Parent Settings</title>
+    <link rel="stylesheet" href="styles.css" />
+    <style>
+      .container {
+        max-width: 520px;
+        margin: 10vh auto;
+        padding: 24px;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 20px;
+      }
+      .brand .logo {
+        font-size: 34px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container card">
+      <div class="brand">
+        <span class="logo">🛡️</span>
+        <div>
+          <h1 style="margin: 0">Guardian</h1>
+          <small class="muted">Parent settings live on the local network dashboard</small>
+        </div>
+      </div>
+      <p>
+        Manage categories, allow/block lists, pause, and view activity from
+        <b>any device on your home/school network</b> by opening the Guardian dashboard.
+      </p>
+      <p class="muted" id="dashUrl">Loading…</p>
+      <button id="openDash" style="width: 100%">Open parent dashboard</button>
+    </div>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

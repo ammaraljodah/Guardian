@@ -1,10 +1,14 @@
 {
   "manifest_version": 3,
   "name": "Guardian - Parental Site Blocker",
-  "version": "1.4.1",
-  "description": "PIN-protected parental control that blocks sites and whole categories (social, games, adult, proxies). Works behind VPNs and proxies.",
+  "version": "2.0.0",
+  "description": "PIN-protected parental control that blocks sites and whole categories. Syncs with a local Guardian backend shared across Chrome profiles.",
   "permissions": ["tabs", "storage", "unlimitedStorage", "webNavigation", "idle", "alarms", "scripting"],
-  "host_permissions": ["<all_urls>"],
+  "host_permissions": [
+    "<all_urls>",
+    "http://127.0.0.1:8765/*",
+    "http://localhost:8765/*"
+  ],
   "background": {
     "service_worker": "background.js",
     "type": "module"

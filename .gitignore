@@ -13,6 +13,12 @@ node_modules/
 coverage/
 *.lcov
 .nyc_output
+.pytest_cache/
+__pycache__/
+*.pyc
+
+# Backend local DB
+backend/data/
 
 # Build output
 dist/

@@ -3,7 +3,8 @@ import {
   getSettings,
   toDomain,
   domainMatches,
-  isTempAllowed
+  isTempAllowed,
+  API_BASE
 } from "./store.js";
 import { aggregate, formatDuration } from "./stats.js";
 
@@ -41,7 +42,6 @@ async function render() {
   $("todayTime").textContent = formatDuration(today.totalSeconds);
   $("todayVisits").textContent = today.totalVisits;
 
-  // Status of the current tab.
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const wrap = $("currentWrap");
   const domain = tab ? toDomain(tab.url) : null;
@@ -60,7 +60,7 @@ async function render() {
 }
 
 $("manageBtn").addEventListener("click", () => {
-  chrome.runtime.openOptionsPage();
+  chrome.tabs.create({ url: API_BASE.replace(/\/$/, "") + "/" });
   window.close();
 });
 

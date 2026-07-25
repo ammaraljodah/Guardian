@@ -3,7 +3,7 @@
 import { CATEGORIES } from "./categories.js";
 import { domainMatches } from "./store.js";
 import * as db from "./db.js";
-import { STORES } from "./db.js";
+import { STORES, apiCall, hasApi } from "./db.js";
 
 const STATS_KEY = "guardianStats";
 
@@ -37,6 +37,14 @@ export function categoryOf(domain) {
 /* ------------------------------ storage -------------------------------- */
 
 async function load() {
+  // Prefer shared server stats so all profiles contribute to one rollup.
+  if (await hasApi()) {
+    try {
+      return await apiCall("/api/stats/raw");
+    } catch (e) {
+      /* fall through */
+    }
+  }
   const o = await chrome.storage.local.get(STATS_KEY);
   return o[STATS_KEY] || {};
 }
@@ -53,14 +61,41 @@ function ensure(stats, day, domain) {
 
 export async function recordVisit(domain) {
   if (!domain) return;
-  const stats = await load();
+  if (await hasApi()) {
+    try {
+      await apiCall("/api/stats/inc", {
+        method: "POST",
+        body: { domain, visits: 1, day: dayKey() }
+      });
+      return;
+    } catch (e) {
+      /* fall through to local */
+    }
+  }
+  const stats = await loadLocalOnly();
   ensure(stats, dayKey(), domain).visits += 1;
   await save(stats);
 }
 
+async function loadLocalOnly() {
+  const o = await chrome.storage.local.get(STATS_KEY);
+  return o[STATS_KEY] || {};
+}
+
 export async function addTime(domain, seconds) {
   if (!domain || seconds <= 0) return;
-  const stats = await load();
+  if (await hasApi()) {
+    try {
+      await apiCall("/api/stats/inc", {
+        method: "POST",
+        body: { domain, seconds, day: dayKey() }
+      });
+      return;
+    } catch (e) {
+      /* fall through */
+    }
+  }
+  const stats = await loadLocalOnly();
   ensure(stats, dayKey(), domain).seconds += seconds;
   await save(stats);
 }

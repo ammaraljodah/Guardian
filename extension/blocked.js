@@ -1,4 +1,4 @@
-import { verifyPin, getSettings, saveSettings, toDomain } from "./store.js";
+import { verifyPin, tempAllowDomain, toDomain, API_BASE } from "./store.js";
 import { CATEGORY_META } from "./stats.js";
 
 const params = new URLSearchParams(location.search);
@@ -23,7 +23,7 @@ const pinInput = document.getElementById("pin");
 const errorEl = document.getElementById("error");
 
 document.getElementById("openSettings").addEventListener("click", () => {
-  chrome.runtime.openOptionsPage();
+  chrome.tabs.create({ url: API_BASE + "/" });
 });
 
 form.addEventListener("submit", async (e) => {
@@ -39,12 +39,13 @@ form.addEventListener("submit", async (e) => {
     return;
   }
 
-  const settings = await getSettings();
   const base = toDomain(site) || site;
-  settings.tempAllow = settings.tempAllow || {};
-  settings.tempAllow[base] = Date.now() + 15 * 60 * 1000; // 15 minutes
-  await saveSettings(settings);
+  try {
+    await tempAllowDomain(base, pin, 15);
+  } catch (err) {
+    errorEl.textContent = err.message || "Could not unlock.";
+    return;
+  }
 
-  // Go to the site now that it's temporarily allowed.
   location.href = "https://" + base;
 });
