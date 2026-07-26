@@ -68,6 +68,15 @@ class BulkAddBody(BaseModel):
     records: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class KeyAppendBody(BaseModel):
+    domain: str
+    bucket: int
+    key: str
+    downTs: int
+    upTs: int
+    category: str = "other"
+
+
 class StatsIncBody(BaseModel):
     day: Optional[str] = None
     domain: str
@@ -316,6 +325,23 @@ def key_bucket(
 ):
     with database.get_conn() as conn:
         return database.do_get_key_bucket(conn, domain, bucket)
+
+
+@app.post("/api/logs/key/append")
+def key_append(
+    body: KeyAppendBody,
+    _: None = Depends(auth.require_extension),
+):
+    with database.get_conn() as conn:
+        return database.do_append_key(
+            conn,
+            domain=body.domain,
+            bucket=body.bucket,
+            key=body.key,
+            down_ts=body.downTs,
+            up_ts=body.upTs,
+            category=body.category,
+        )
 
 
 @app.post("/api/logs/{store}")

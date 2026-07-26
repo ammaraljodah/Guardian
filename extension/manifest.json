@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Guardian - Parental Site Blocker",
-  "version": "2.0.0",
+  "version": "2.0.2",
   "description": "PIN-protected parental control that blocks sites and whole categories. Syncs with a local Guardian backend shared across Chrome profiles.",
   "permissions": ["tabs", "storage", "unlimitedStorage", "webNavigation", "idle", "alarms", "scripting"],
   "host_permissions": [

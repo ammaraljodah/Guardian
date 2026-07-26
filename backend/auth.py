@@ -81,12 +81,13 @@ def make_session_cookie() -> str:
 
 
 def set_session(response: Response) -> None:
+    # No Max-Age / Expires → browser session cookie (dropped when Chrome
+    # fully quits). The web UI also clears this on every dashboard page load.
     response.set_cookie(
         key=config.SESSION_COOKIE,
         value=make_session_cookie(),
         httponly=True,
         samesite="lax",
-        max_age=config.SESSION_MAX_AGE,
         path="/",
     )
 

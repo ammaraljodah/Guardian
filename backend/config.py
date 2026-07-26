@@ -30,8 +30,9 @@ EXTENSION_TOKEN = os.environ.get(
 SESSION_SECRET = os.environ.get("GUARDIAN_SESSION_SECRET") or secrets.token_hex(32)
 
 # Cookie name for parent session after PIN login.
+# Kept short: the dashboard always clears it on page open and requires PIN again.
 SESSION_COOKIE = "guardian_session"
-SESSION_MAX_AGE = 60 * 60 * 12  # 12 hours
+SESSION_MAX_AGE = 30 * 60  # 30 minutes for API calls after unlock
 
 PBKDF2_ITERATIONS = 150_000
 PBKDF2_DKLEN = 32

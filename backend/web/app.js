@@ -23,9 +23,44 @@ const setupView = $("setupView");
 const lockView = $("lockView");
 const dashboard = $("dashboard");
 
+let toastTimer = null;
+function ensureToast() {
+  let el = document.getElementById("toast");
+  if (el) return el;
+  el = document.createElement("div");
+  el.id = "toast";
+  el.className = "toast";
+  el.setAttribute("role", "status");
+  document.body.appendChild(el);
+  return el;
+}
+
+function showToast(message, { ok = true, sub = "" } = {}) {
+  const el = ensureToast();
+  el.className = `toast show ${ok ? "ok" : "err"}`;
+  el.innerHTML = sub
+    ? `${message}<span class="toast-sub">${sub}</span>`
+    : message;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), 3200);
+}
+
 function show(el) {
   [setupView, lockView, dashboard].forEach((v) => v.classList.add("hidden"));
   el.classList.remove("hidden");
+  const lockBtn = $("lockBtn");
+  if (lockBtn) lockBtn.classList.toggle("hidden", el !== dashboard);
+}
+
+async function lockDashboard() {
+  try {
+    await api("/api/auth/logout", { method: "POST" });
+  } catch (e) {
+    /* ignore */
+  }
+  show(lockView);
+  $("lockPin").value = "";
+  $("lockPin").focus();
 }
 
 async function api(path, opts = {}) {
@@ -127,13 +162,15 @@ async function boot() {
       "<p style='padding:2rem;font-family:sans-serif'>Guardian backend is not reachable. Start the backend service, then reload.</p>";
     return;
   }
+  // Always require the PIN when opening the parent page — never unlock from
+  // a leftover cookie after Chrome was closed and reopened.
   try {
-    await getSettings();
-    await openDashboard();
+    await api("/api/auth/logout", { method: "POST" });
   } catch (e) {
-    show(lockView);
-    $("lockPin").focus();
+    /* ignore */
   }
+  show(lockView);
+  $("lockPin").focus();
 }
 
 $("createPinBtn").addEventListener("click", async () => {
@@ -164,6 +201,7 @@ $("unlockBtn").addEventListener("click", unlock);
 $("lockPin").addEventListener("keydown", (e) => {
   if (e.key === "Enter") unlock();
 });
+$("lockBtn").addEventListener("click", lockDashboard);
 
 async function unlock() {
   const err = $("lockError");
@@ -395,10 +433,10 @@ function renderHistoryLog(entries, settings, total = entries.length) {
     body.appendChild(tr);
   }
   body.querySelectorAll("[data-allow]").forEach((btn) => {
-    btn.addEventListener("click", () => alwaysAllow(btn.dataset.allow));
+    btn.addEventListener("click", () => alwaysAllow(btn.dataset.allow, btn));
   });
   body.querySelectorAll("[data-block]").forEach((btn) => {
-    btn.addEventListener("click", () => alwaysBlock(btn.dataset.block));
+    btn.addEventListener("click", () => alwaysBlock(btn.dataset.block, btn));
   });
 }
 
@@ -652,26 +690,58 @@ function renderList(containerId, items, onRemove) {
   });
 }
 
-async function alwaysAllow(domain) {
-  const s = await getSettings();
-  const allowlist = [...(s.allowlist || [])];
-  if (!domainMatches(domain, allowlist)) allowlist.push(domain);
-  const customBlocked = (s.customBlocked || []).filter(
-    (d) => !domainMatches(domain, [d])
-  );
-  await saveSettings({ allowlist, customBlocked });
-  await render();
-  await renderStats();
+async function alwaysAllow(domain, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    const s = await getSettings();
+    const allowlist = [...(s.allowlist || [])];
+    const already = domainMatches(domain, allowlist);
+    if (!already) allowlist.push(domain);
+    const customBlocked = (s.customBlocked || []).filter(
+      (d) => !domainMatches(domain, [d])
+    );
+    await saveSettings({ allowlist, customBlocked });
+    showToast(
+      already ? `${domain} is already allowed` : `Allowed ${domain}`,
+      {
+        ok: true,
+        sub: "The extension will pick this up within a few seconds."
+      }
+    );
+    await render();
+    await renderStats();
+  } catch (e) {
+    showToast(`Could not allow ${domain}`, { ok: false, sub: e.message });
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
-async function alwaysBlock(domain) {
-  const s = await getSettings();
-  const customBlocked = [...(s.customBlocked || [])];
-  if (!domainMatches(domain, customBlocked)) customBlocked.push(domain);
-  const allowlist = (s.allowlist || []).filter((d) => !domainMatches(domain, [d]));
-  await saveSettings({ allowlist, customBlocked });
-  await render();
-  await renderStats();
+async function alwaysBlock(domain, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    const s = await getSettings();
+    const customBlocked = [...(s.customBlocked || [])];
+    const already = domainMatches(domain, customBlocked);
+    if (!already) customBlocked.push(domain);
+    const allowlist = (s.allowlist || []).filter(
+      (d) => !domainMatches(domain, [d])
+    );
+    await saveSettings({ allowlist, customBlocked });
+    showToast(
+      already ? `${domain} is already on the block list` : `Blocked ${domain}`,
+      {
+        ok: true,
+        sub: "Open tabs for this site will close within a few seconds."
+      }
+    );
+    await render();
+    await renderStats();
+  } catch (e) {
+    showToast(`Could not block ${domain}`, { ok: false, sub: e.message });
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 async function clearAllCustomBlocks() {
@@ -690,13 +760,24 @@ async function clearAllCustomBlocks() {
 $("addBlockBtn").addEventListener("click", async () => {
   const input = $("blockInput");
   const domain = toDomain(input.value) || input.value.trim().toLowerCase();
-  if (!domain) return;
-  const s = await getSettings();
-  const customBlocked = [...(s.customBlocked || [])];
-  if (!customBlocked.includes(domain)) customBlocked.push(domain);
-  await saveSettings({ customBlocked });
-  input.value = "";
-  render();
+  if (!domain) {
+    showToast("Enter a domain to block", { ok: false });
+    return;
+  }
+  try {
+    const s = await getSettings();
+    const customBlocked = [...(s.customBlocked || [])];
+    if (!customBlocked.includes(domain)) customBlocked.push(domain);
+    await saveSettings({ customBlocked });
+    input.value = "";
+    showToast(`Blocked ${domain}`, {
+      ok: true,
+      sub: "Open tabs for this site will close within a few seconds."
+    });
+    await render();
+  } catch (e) {
+    showToast(`Could not block ${domain}`, { ok: false, sub: e.message });
+  }
 });
 
 $("addAllowBtn").addEventListener("click", async () => {

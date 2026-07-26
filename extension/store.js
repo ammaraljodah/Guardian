@@ -4,6 +4,9 @@ import { CATEGORIES } from "./categories.js";
 import { API_BASE, EXTENSION_TOKEN } from "./config.js";
 
 const KEY = "guardianSettings";
+const SYNC_TTL_MS = 2500;
+let lastSyncAt = 0;
+let syncInFlight = null;
 
 const DISCORD_DOMAINS = ["discord.com", "discord.gg", "discordapp.com"];
 
@@ -71,26 +74,33 @@ async function apiFetch(path, opts = {}) {
 
 /** Pull machine-wide settings from the backend into the local cache. */
 export async function syncSettingsFromServer() {
-  try {
-    const remote = await apiFetch("/api/settings");
-    const merged = {
-      ...defaultSettings(),
-      ...remote,
-      customBlocked: ensureDiscord(remote.customBlocked),
-      categories: {
-        ...defaultSettings().categories,
-        ...(remote.categories || {})
-      }
-    };
-    await chrome.storage.local.set({ [KEY]: merged });
-    return merged;
-  } catch (e) {
-    console.warn("[Guardian] settings sync failed:", e.message);
-    return getSettings();
-  }
+  if (syncInFlight) return syncInFlight;
+  syncInFlight = (async () => {
+    try {
+      const remote = await apiFetch("/api/settings");
+      const merged = {
+        ...defaultSettings(),
+        ...remote,
+        customBlocked: ensureDiscord(remote.customBlocked),
+        categories: {
+          ...defaultSettings().categories,
+          ...(remote.categories || {})
+        }
+      };
+      await chrome.storage.local.set({ [KEY]: merged });
+      lastSyncAt = Date.now();
+      return merged;
+    } catch (e) {
+      console.warn("[Guardian] settings sync failed:", e.message);
+      return getSettingsCached();
+    } finally {
+      syncInFlight = null;
+    }
+  })();
+  return syncInFlight;
 }
 
-export async function getSettings() {
+async function getSettingsCached() {
   const data = await chrome.storage.local.get(KEY);
   const stored = data[KEY] || {};
   const base = defaultSettings();
@@ -107,6 +117,17 @@ export async function getSettings() {
     allowlist: stored.allowlist || base.allowlist,
     tempAllow: stored.tempAllow || {}
   };
+}
+
+/**
+ * Read settings. Pass { fresh: true } to pull from the server when the local
+ * mirror is older than a few seconds (so parent Block/Allow applies quickly).
+ */
+export async function getSettings({ fresh = false } = {}) {
+  if (fresh && Date.now() - lastSyncAt > SYNC_TTL_MS) {
+    return syncSettingsFromServer();
+  }
+  return getSettingsCached();
 }
 
 /** Local cache only — server remains source of truth for parent changes. */

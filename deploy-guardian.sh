@@ -133,37 +133,78 @@ cat > "$HOST_DIR/update.xml" <<EOF
 </gupdate>
 EOF
 
-# --- Chrome policy (force-install; PIN lives in the backend) ---
+# --- Chrome policy (force-install Guardian; block installing any other extensions) ---
 echo ">> Writing policy in $POLICY_DIR"
 mkdir -p "$POLICY_DIR"
-rm -f "$POLICY_DIR/guardian_force.json" "$POLICY_DIR/guardian.json"
+rm -f "$POLICY_DIR/guardian_force.json" "$POLICY_DIR/guardian.json" "$POLICY_DIR/disable_extensions.json"
 
-cat > "$POLICY_DIR/guardian.json" <<EOF
-{
-  "ExtensionInstallForcelist": [
-    "$EXT_ID;file://$HOST_DIR/update.xml"
-  ],
-  "ExtensionInstallSources": [
-    "file:///*"
-  ],
-  "ExtensionSettings": {
-    "$EXT_ID": {
-      "installation_mode": "force_installed",
-      "update_url": "file://$HOST_DIR/update.xml",
-      "toolbar_pin": "force_pinned"
-    }
-  }
-}
-EOF
+# Discover already-installed extension IDs so they are allowlisted (kept),
+# while "*" stays blocked for any NEW installs.
+python3 - <<PY
+import json, os, re
+from pathlib import Path
 
-cat > "$POLICY_DIR/blocked_extensions.json" <<'EOF'
-{
-  "ExtensionInstallBlocklist": ["*"],
-  "URLBlocklist": [
-    "https://chromewebstore.google.com/*"
-  ]
+policy_dir = Path("$POLICY_DIR")
+ext_id = "$EXT_ID"
+update_xml = "file://$HOST_DIR/update.xml"
+# Only Guardian + AdBlock are permitted going forward.
+adblock_id = "gighmmpiobklfepjocnamgkkbiglidom"
+allowed = {ext_id, adblock_id}
+
+ext_settings = {
+    "*": {
+        "installation_mode": "blocked",
+        "blocked_install_message": "Installing extensions is disabled by parental controls.",
+    },
+    ext_id: {
+        "installation_mode": "force_installed",
+        "update_url": update_xml,
+        "toolbar_pin": "force_pinned",
+        # Prevent kids from revoking site access in chrome://extensions
+        "runtime_allowed_hosts": ["*://*/*"],
+        "runtime_blocked_hosts": [],
+    },
+    adblock_id: {
+        "installation_mode": "normal_installed",
+        "toolbar_pin": "force_pinned",
+        "runtime_allowed_hosts": ["*://*/*"],
+        "runtime_blocked_hosts": [],
+    },
 }
-EOF
+
+guardian = {
+    "ExtensionInstallForcelist": [f"{ext_id};{update_xml}"],
+    "ExtensionInstallSources": ["file:///*"],
+    "ExtensionInstallBlocklist": ["*"],
+    "ExtensionInstallAllowlist": sorted(allowed),
+    "ExtensionSettings": ext_settings,
+    "DeveloperToolsAvailability": 2,
+    # Block creating new Chrome profiles / guest sessions
+    "BrowserAddPersonEnabled": False,
+    "BrowserGuestModeEnabled": False,
+    "ProfilePickerOnStartupEnabled": False,
+}
+blocked = {
+    "ExtensionInstallBlocklist": ["*"],
+    "URLBlocklist": [
+        "https://chromewebstore.google.com/*",
+        "https://chrome.google.com/webstore/*",
+        "chrome://extensions",
+        "chrome://extensions/*",
+    ],
+}
+profiles = {
+    "BrowserAddPersonEnabled": False,
+    "BrowserGuestModeEnabled": False,
+    "ProfilePickerOnStartupEnabled": False,
+}
+(policy_dir / "guardian.json").write_text(json.dumps(guardian, indent=2) + "\\n")
+(policy_dir / "blocked_extensions.json").write_text(json.dumps(blocked, indent=2) + "\\n")
+(policy_dir / "block_profiles.json").write_text(json.dumps(profiles, indent=2) + "\\n")
+print(">> Allowlisted extensions:", ", ".join(sorted(allowed)))
+print(">> Guardian site access forced; chrome://extensions blocked")
+print(">> New Chrome profiles / guest mode blocked")
+PY
 
 # --- Remove legacy native-messaging host if present ---
 NM_HOST_NAME="com.guardian.logs"

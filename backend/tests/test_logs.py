@@ -82,7 +82,38 @@ def test_pagination_and_cutoff(client, ext_headers):
     assert count["count"] == 3
 
 
-def test_key_bucket_put(client, ext_headers):
+def test_key_append_merges(client, ext_headers):
+    bucket = 1_800_000
+    for ch in ("h", "i", "!"):
+        r = client.post(
+            "/api/logs/key/append",
+            headers=ext_headers,
+            json={
+                "domain": "typed.com",
+                "bucket": bucket,
+                "key": ch,
+                "downTs": 2000,
+                "upTs": 2001,
+                "category": "other",
+            },
+        )
+        assert r.status_code == 200
+
+    got = client.get(
+        "/api/logs/key/bucket",
+        headers=ext_headers,
+        params={"domain": "typed.com", "bucket": bucket},
+    ).json()
+    assert got["record"]["text"] == "hi!"
+    assert got["record"]["count"] == 3
+
+    page = client.get(
+        "/api/logs/key",
+        headers=ext_headers,
+        params={"cmd": "getPage", "limit": 10},
+    ).json()
+    assert any(e.get("domain") == "typed.com" for e in page["entries"])
+
     r = client.post(
         "/api/logs/key",
         headers=ext_headers,

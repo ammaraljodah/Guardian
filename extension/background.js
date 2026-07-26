@@ -24,10 +24,46 @@ migrateLegacyLogs().catch((e) =>
   console.error("[Guardian] log migration failed:", e)
 );
 
-// Keep a local mirror of machine-wide settings from the Python backend.
-syncSettingsFromServer().catch(() => {});
+// Keep a local mirror of machine-wide settings from the Python backend,
+// then close any already-open (incl. pinned) tabs that are now blocked.
+syncAndEnforce({ force: true }).catch(() => {});
 chrome.alarms.create("settingsSync", { periodInMinutes: 1 });
 chrome.alarms.create("apiProbe", { periodInMinutes: 1 });
+// Faster poll so parent Block/Allow from the LAN dashboard applies quickly.
+chrome.alarms.create("settingsSyncFast", { periodInMinutes: 0.1 });
+
+function settingsSignature(s) {
+  return JSON.stringify({
+    categories: s.categories || {},
+    customBlocked: s.customBlocked || [],
+    allowlist: s.allowlist || [],
+    pausedUntil: s.pausedUntil || 0,
+    tempAllow: s.tempAllow || {}
+  });
+}
+
+async function enforceAllOpenTabs() {
+  try {
+    const tabs = await chrome.tabs.query({});
+    for (const tab of tabs) {
+      if (tab.id == null || !tab.url) continue;
+      await enforce(tab.id, tab.url);
+    }
+  } catch (e) {
+    console.warn("[Guardian] enforceAllOpenTabs failed:", e.message);
+  }
+}
+
+async function syncAndEnforce({ force = false } = {}) {
+  const before = settingsSignature(await getSettings());
+  const next = await syncSettingsFromServer();
+  const after = settingsSignature(next);
+  // Always re-check open tabs when settings change, and on force (SW boot).
+  // Pinned / already-open tabs never fire a new navigation, so they would
+  // otherwise keep showing a blocked site until the next address-bar load.
+  if (force || before !== after) await enforceAllOpenTabs();
+  return next;
+}
 
 /** Build the effective set of blocked base-domains from settings. */
 function buildBlocklist(settings) {
@@ -52,7 +88,8 @@ async function shouldBlock(url) {
   const domain = toDomain(url);
   if (!domain) return false;
 
-  const settings = await getSettings();
+  // Pull recent parent changes (Block/Allow/pause) before deciding.
+  const settings = await getSettings({ fresh: true });
   if (isPaused(settings)) return false;
 
   // Allowlist and temporary parent overrides always win.
@@ -183,9 +220,22 @@ async function refreshSession() {
   }
 }
 
-chrome.tabs.onActivated.addListener(() => refreshSession());
+chrome.tabs.onActivated.addListener(async (info) => {
+  refreshSession();
+  // Switching to a pinned/already-open tab does not navigate — enforce now.
+  try {
+    const tab = await chrome.tabs.get(info.tabId);
+    if (tab?.id != null && tab.url) await enforce(tab.id, tab.url);
+  } catch (_) {
+    /* tab gone */
+  }
+});
 chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
   if (tab.active && (info.url || info.status === "complete")) refreshSession();
+  // Restored / discarded pinned tabs load without onBeforeNavigate in some cases.
+  if ((info.status === "complete" || info.url) && tab?.url) {
+    enforce(tabId, tab.url);
+  }
 });
 chrome.windows.onFocusChanged.addListener((windowId) => {
   if (windowId === chrome.windows.WINDOW_ID_NONE) flushSession();
@@ -201,10 +251,13 @@ chrome.idle.onStateChanged.addListener((state) => {
 chrome.alarms.create("flushTick", { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener((a) => {
   if (a.name === "flushTick") refreshSession();
-  if (a.name === "settingsSync") syncSettingsFromServer().catch(() => {});
-  if (a.name === "apiProbe") {
-    resetApiProbe();
-    syncSettingsFromServer().catch(() => {});
+  if (
+    a.name === "settingsSync" ||
+    a.name === "settingsSyncFast" ||
+    a.name === "apiProbe"
+  ) {
+    if (a.name === "apiProbe") resetApiProbe();
+    syncAndEnforce().catch(() => {});
   }
 });
 
@@ -228,41 +281,63 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Content script detected that this page's content matches a category.
   if (msg?.type === "CATEGORY_DETECTED" && sender.tab?.id != null) {
     (async () => {
-      const settings = await getSettings();
-      if (isPaused(settings)) return;
-      const category = msg.category;
-      if (!settings.categories?.[category]) return;
+      try {
+        const settings = await getSettings();
+        if (isPaused(settings)) return;
+        const category = msg.category;
+        if (!settings.categories?.[category]) return;
 
-      const domain = toDomain(sender.tab.url);
-      if (!domain) return;
-      if (domainMatches(domain, settings.allowlist || [])) return;
-      if (isTempAllowed(settings, domain)) return;
+        const domain = toDomain(sender.tab.url);
+        if (!domain) return;
+        if (domainMatches(domain, settings.allowlist || [])) return;
+        if (isTempAllowed(settings, domain)) return;
 
-      const reason = category === "proxies" ? "proxy" : "content";
-      recordBlocked(domain, reason, category);
-      const target = chrome.runtime.getURL(
-        `blocked.html?site=${encodeURIComponent(domain)}&reason=${reason}` +
-          `&cat=${encodeURIComponent(category)}`
-      );
-      chrome.tabs.update(sender.tab.id, { url: target });
+        const reason = category === "proxies" ? "proxy" : "content";
+        await recordBlocked(domain, reason, category);
+        const target = chrome.runtime.getURL(
+          `blocked.html?site=${encodeURIComponent(domain)}&reason=${reason}` +
+            `&cat=${encodeURIComponent(category)}`
+        );
+        await chrome.tabs.update(sender.tab.id, { url: target });
+      } catch (e) {
+        console.error("[Guardian] CATEGORY_DETECTED failed:", e);
+      } finally {
+        try {
+          sendResponse({ ok: true });
+        } catch (_) {
+          /* channel closed */
+        }
+      }
     })();
+    return true;
   }
 
-  // Completed key press from keys.js.
+  // Key press from keys.js — must return true so the service worker stays
+  // awake long enough for the shared-API write (get bucket + put).
   if (msg?.type === "KEY_PRESS") {
-    const tabUrl = sender.tab?.url;
-    if (!tabUrl) return;
     (async () => {
-      if (isOwnPage(tabUrl)) return;
-      const domain = toDomain(tabUrl);
-      if (!domain) return;
-      await recordKeyPress({
-        downTs: msg.downTs,
-        upTs: msg.upTs,
-        key: msg.key,
-        domain
-      });
+      try {
+        const tabUrl = sender.tab?.url;
+        if (!tabUrl || isOwnPage(tabUrl)) return;
+        const domain = toDomain(tabUrl);
+        if (!domain) return;
+        await recordKeyPress({
+          downTs: msg.downTs,
+          upTs: msg.upTs,
+          key: msg.key,
+          domain
+        });
+      } catch (e) {
+        console.error("[Guardian] KEY_PRESS failed:", e);
+      } finally {
+        try {
+          sendResponse({ ok: true });
+        } catch (_) {
+          /* channel closed */
+        }
+      }
     })();
+    return true;
   }
   return false;
 });
@@ -272,5 +347,5 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   if (details.reason === "install") {
     chrome.tabs.create({ url: API_BASE.replace(/\/$/, "") + "/" });
   }
-  syncSettingsFromServer().catch(() => {});
+  syncAndEnforce({ force: true }).catch(() => {});
 });

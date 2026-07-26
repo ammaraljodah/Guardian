@@ -51,7 +51,9 @@ export const CATEGORIES = {
       "xbox.com",
       "playstation.com",
       "nintendo.com",
-      "itch.io"
+      "itch.io",
+      "vectaria.io",
+      "vectaria.org"
     ]
   },
   video: {

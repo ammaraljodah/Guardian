@@ -195,7 +195,7 @@ def do_get_key_bucket(
     conn: sqlite3.Connection, domain: str, bucket: int
 ) -> dict:
     row = conn.execute(
-        "SELECT * FROM key WHERE domain=? AND bucket=? LIMIT 1", (domain, bucket)
+        'SELECT * FROM "key" WHERE domain=? AND bucket=? LIMIT 1', (domain, bucket)
     ).fetchone()
     return {"record": row_to_record(row) if row else None}
 
@@ -244,6 +244,69 @@ def do_clear(conn: sqlite3.Connection, store: str) -> dict:
     conn.execute(f"DELETE FROM {store}")
     conn.commit()
     return {"ok": True}
+
+
+def apply_key_char(text: str, key: str) -> str:
+    modifiers = {"Shift", "Control", "Alt", "Meta", "CapsLock"}
+    if key in modifiers:
+        return text
+    if key == "Backspace":
+        return text[:-1]
+    if key == "Enter":
+        return text + "\n"
+    if key == "Tab":
+        return text + "\t"
+    if key == " ":
+        return text + " "
+    if len(key) == 1:
+        return text + key
+    return text
+
+
+def do_append_key(
+    conn: sqlite3.Connection,
+    *,
+    domain: str,
+    bucket: int,
+    key: str,
+    down_ts: int,
+    up_ts: int,
+    category: str = "other",
+) -> dict:
+    """Atomically append one keystroke into the domain/bucket row."""
+    row = conn.execute(
+        'SELECT * FROM "key" WHERE domain=? AND bucket=? LIMIT 1',
+        (domain, bucket),
+    ).fetchone()
+    if row:
+        rec = row_to_record(row)
+        prev = rec.get("text") or ""
+        nxt = apply_key_char(prev, key)
+        if nxt == prev:
+            return {"id": rec.get("id"), "unchanged": True}
+        rec["text"] = nxt
+        rec["upTs"] = up_ts
+        rec["count"] = int(rec.get("count") or 0) + 1
+        rec["ts"] = down_ts
+        return do_put(conn, "key", rec)
+
+    text = apply_key_char("", key)
+    if not text:
+        return {"id": None, "unchanged": True}
+    return do_add(
+        conn,
+        "key",
+        {
+            "ts": down_ts,
+            "bucket": bucket,
+            "downTs": down_ts,
+            "upTs": up_ts,
+            "text": text,
+            "count": 1,
+            "domain": domain,
+            "category": category,
+        },
+    )
 
 
 def do_bulk_add(conn: sqlite3.Connection, store: str, records: list) -> dict:
