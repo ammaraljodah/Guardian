@@ -204,8 +204,7 @@ def auth_setup(body: SetupBody, response: Response):
 @app.post("/api/auth/login")
 def auth_login(body: PinBody, response: Response):
     pin = (body.pin or "").strip()
-    if not auth.pin_matches_db(pin):
-        raise HTTPException(401, "Incorrect PIN")
+    auth.require_pin(pin)
     auth.set_session(response)
     return {"ok": True}
 
@@ -221,7 +220,7 @@ def auth_verify(
     body: PinBody,
     _: str = Depends(auth.require_extension_or_session),
 ):
-    ok = auth.pin_matches_db((body.pin or "").strip())
+    ok = auth.check_pin((body.pin or "").strip())
     return {"ok": ok}
 
 
@@ -266,6 +265,9 @@ def put_settings(
             settings["pinHash"] = pin_hash
             settings["pinSalt"] = pin_salt
             settings["setup"] = True
+            # Changing the PIN from an unlocked session clears any lockout.
+            settings["pinFailCount"] = 0
+            settings["pinLockedUntil"] = 0
         database.save_settings(conn, settings)
         return database.public_settings(settings)
 
@@ -298,8 +300,9 @@ def temp_allow(
 
     # From blocked page (extension), require PIN in body.
     if who == "extension":
-        if not body.pin or not auth.pin_matches_db(body.pin.strip()):
+        if not body.pin:
             raise HTTPException(401, "Incorrect PIN")
+        auth.require_pin(body.pin.strip())
     domain = (body.domain or "").strip().lower().lstrip(".")
     if domain.startswith("www."):
         domain = domain[4:]

@@ -37,6 +37,10 @@ SESSION_MAX_AGE = 30 * 60  # 30 minutes for API calls after unlock
 PBKDF2_ITERATIONS = 150_000
 PBKDF2_DKLEN = 32
 
+# Wrong-PIN lockout (shared across dashboard + blocked-page unlock).
+PIN_MAX_ATTEMPTS = 3
+PIN_LOCKOUT_SECONDS = 5 * 60 * 60  # 5 hours
+
 DISCORD_DOMAINS = ["discord.com", "discord.gg", "discordapp.com"]
 
 CATEGORY_META = {

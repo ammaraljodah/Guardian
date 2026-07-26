@@ -67,7 +67,21 @@ async function apiFetch(path, opts = {}) {
     data = null;
   }
   if (!res.ok) {
-    throw new Error((data && data.detail) || res.statusText);
+    const detail = data && data.detail;
+    let message = res.statusText;
+    if (typeof detail === "string") message = detail;
+    else if (detail && detail.message) message = detail.message;
+    else if (detail) {
+      try {
+        message = JSON.stringify(detail);
+      } catch (_) {
+        /* keep statusText */
+      }
+    }
+    const err = new Error(message);
+    err.status = res.status;
+    err.detail = detail;
+    throw err;
   }
   return data;
 }
@@ -141,9 +155,13 @@ export async function verifyPin(pin) {
       method: "POST",
       body: JSON.stringify({ pin })
     });
-    return !!resp.ok;
+    return { ok: !!resp.ok };
   } catch (e) {
-    return false;
+    return {
+      ok: false,
+      locked: e.status === 429,
+      message: e.message || "Incorrect PIN."
+    };
   }
 }
 

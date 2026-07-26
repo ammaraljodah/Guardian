@@ -79,10 +79,21 @@ async function api(path, opts = {}) {
     data = null;
   }
   if (!res.ok) {
-    const detail = (data && (data.detail || data.error)) || res.statusText;
-    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+    throw new Error(formatApiDetail(data, res.statusText));
   }
   return data;
+}
+
+function formatApiDetail(data, fallback) {
+  const detail = data && (data.detail || data.error);
+  if (!detail) return fallback || "Request failed";
+  if (typeof detail === "string") return detail;
+  if (detail.message) return detail.message;
+  try {
+    return JSON.stringify(detail);
+  } catch (e) {
+    return fallback || "Request failed";
+  }
 }
 
 function domainMatches(domain, list) {
@@ -215,7 +226,11 @@ async function unlock() {
     $("lockPin").value = "";
     await openDashboard();
   } catch (e) {
-    err.textContent = "Incorrect PIN.";
+    const msg = (e && e.message) || "";
+    err.textContent =
+      msg && msg !== "Incorrect PIN"
+        ? msg
+        : "Incorrect PIN.";
     $("lockPin").value = "";
   }
 }

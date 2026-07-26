@@ -104,6 +104,8 @@ def default_settings() -> dict[str, Any]:
         "allowlist": [],
         "pausedUntil": 0,
         "tempAllow": {},
+        "pinFailCount": 0,
+        "pinLockedUntil": 0,
     }
 
 
@@ -150,6 +152,7 @@ def public_settings(settings: dict[str, Any]) -> dict[str, Any]:
     # Extension needs to know setup; pin hashes stay server-side for verify.
     out.pop("pinHash", None)
     out.pop("pinSalt", None)
+    out.pop("pinFailCount", None)
     return out
 
 

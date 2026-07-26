@@ -140,8 +140,103 @@ def require_extension(
 
 
 def pin_matches_db(pin: str) -> bool:
+    """Raw hash check only — prefer check_pin() when enforcing lockout."""
     with database.get_conn() as conn:
         settings = database.get_settings(conn)
     if not settings.get("setup") or not settings.get("pinHash"):
         return False
     return verify_pin_hash(pin, settings["pinHash"], settings["pinSalt"])
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def lockout_remaining_ms(settings: dict[str, Any]) -> int:
+    until = int(settings.get("pinLockedUntil") or 0)
+    return max(0, until - _now_ms())
+
+
+def format_lockout_message(remaining_ms: int) -> str:
+    secs = max(1, (remaining_ms + 999) // 1000)
+    hours = secs // 3600
+    mins = (secs % 3600) // 60
+    if hours >= 1:
+        if mins >= 1:
+            return (
+                f"Too many wrong PINs. Try again in {hours}h {mins}m."
+            )
+        return f"Too many wrong PINs. Try again in {hours} hour{'s' if hours != 1 else ''}."
+    if mins >= 1:
+        return f"Too many wrong PINs. Try again in {mins} minute{'s' if mins != 1 else ''}."
+    return f"Too many wrong PINs. Try again in {secs} second{'s' if secs != 1 else ''}."
+
+
+def lockout_http_detail(settings: dict[str, Any]) -> dict[str, Any]:
+    remaining = lockout_remaining_ms(settings)
+    return {
+        "error": "pin_locked",
+        "lockedUntil": int(settings.get("pinLockedUntil") or 0),
+        "message": format_lockout_message(remaining),
+    }
+
+
+def _expire_lockout_if_needed(conn, settings: dict[str, Any]) -> dict[str, Any]:
+    until = int(settings.get("pinLockedUntil") or 0)
+    if until and until <= _now_ms():
+        settings["pinLockedUntil"] = 0
+        settings["pinFailCount"] = 0
+        database.save_settings(conn, settings)
+    return settings
+
+
+def raise_if_pin_locked(settings: dict[str, Any]) -> None:
+    if lockout_remaining_ms(settings) > 0:
+        raise HTTPException(status_code=429, detail=lockout_http_detail(settings))
+
+
+def _record_pin_failure(conn, settings: dict[str, Any]) -> None:
+    """Increment fail count; lock for PIN_LOCKOUT_SECONDS after PIN_MAX_ATTEMPTS."""
+    count = int(settings.get("pinFailCount") or 0) + 1
+    settings["pinFailCount"] = count
+    if count >= config.PIN_MAX_ATTEMPTS:
+        settings["pinFailCount"] = 0
+        settings["pinLockedUntil"] = _now_ms() + config.PIN_LOCKOUT_SECONDS * 1000
+        database.save_settings(conn, settings)
+        raise_if_pin_locked(settings)
+    database.save_settings(conn, settings)
+
+
+def _clear_pin_failures(conn, settings: dict[str, Any]) -> None:
+    if settings.get("pinFailCount") or settings.get("pinLockedUntil"):
+        settings["pinFailCount"] = 0
+        settings["pinLockedUntil"] = 0
+        database.save_settings(conn, settings)
+
+
+def check_pin(pin: str) -> bool:
+    """
+    Verify PIN with shared lockout.
+
+    Returns True on success (failures cleared).
+    Returns False on wrong PIN (failure recorded).
+    Raises HTTP 429 after 3 failures for 5 hours.
+    """
+    pin = (pin or "").strip()
+    with database.get_conn() as conn:
+        settings = database.get_settings(conn)
+        _expire_lockout_if_needed(conn, settings)
+        raise_if_pin_locked(settings)
+        if not settings.get("setup") or not settings.get("pinHash"):
+            return False
+        if verify_pin_hash(pin, settings["pinHash"], settings["pinSalt"]):
+            _clear_pin_failures(conn, settings)
+            return True
+        _record_pin_failure(conn, settings)
+        return False
+
+
+def require_pin(pin: str) -> None:
+    """Like check_pin, but raises 401 on wrong PIN."""
+    if not check_pin(pin):
+        raise HTTPException(status_code=401, detail="Incorrect PIN")

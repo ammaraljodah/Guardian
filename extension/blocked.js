@@ -32,9 +32,9 @@ form.addEventListener("submit", async (e) => {
   const pin = pinInput.value.trim();
   if (!pin) return;
 
-  const ok = await verifyPin(pin);
-  if (!ok) {
-    errorEl.textContent = "Incorrect PIN.";
+  const result = await verifyPin(pin);
+  if (!result.ok) {
+    errorEl.textContent = result.message || "Incorrect PIN.";
     pinInput.value = "";
     return;
   }
